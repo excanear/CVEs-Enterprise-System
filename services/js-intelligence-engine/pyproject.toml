@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "js-intelligence-engine"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "Static JavaScript bundle analysis: AST traversal, source map reconstruction, route inference, dependency graphing"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx[http2]>=0.28",
+    "py-tree-sitter>=0.23",
+    "tree-sitter-javascript>=0.23",
+    "networkx>=3.3",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "pydantic-settings>=2.7",
+    "cves-db-base",
+    "cves-event-schemas",
+    "cves-kafka-client",
+    "cves-observability",
+    "cves-security",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/js_intelligence"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

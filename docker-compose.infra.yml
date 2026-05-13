@@ -164,6 +164,69 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
     shm_size: "2gb"   # Chromium needs shared memory
 
+  # ── JS Intelligence Engine ────────────────────────────────────────────
+  js-intelligence-engine:
+    build:
+      context: .
+      dockerfile: services/js-intelligence-engine/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8005:8005"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://cves:cves_secret@postgres:5432/cves_platform"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+
+  # ── Exposure Validation Engine ────────────────────────────────────────
+  exposure-validation-engine:
+    build:
+      context: .
+      dockerfile: services/exposure-validation-engine/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8006:8006"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://cves:cves_secret@postgres:5432/cves_platform"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      REDIS_URL: "redis://redis:6379/0"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+    shm_size: "1gb"   # Playwright on-demand needs shared memory
+
+  # ── Asset Graph Engine ────────────────────────────────────────────────
+  asset-graph-engine:
+    build:
+      context: .
+      dockerfile: services/asset-graph-engine/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      neo4j:
+        condition: service_started
+    ports:
+      - "8007:8007"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://cves:cves_secret@postgres:5432/cves_platform"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      NEO4J_URL: "bolt://neo4j:7687"
+      NEO4J_USER: "neo4j"
+      NEO4J_PASSWORD: "neo4j_secret"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+
 volumes:
   postgres_data:
   redis_data:

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "exposure-validation-engine"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "Exposure Validation Engine — reduces false positives via 5-stage active validation pipeline"
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx[http2]>=0.28",
+    "playwright>=1.49",
+    "redis[asyncio]>=5.0",
+    "confluent-kafka>=2.6",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "structlog>=24.4",
+    "cves-db-base",
+    "cves-event-schemas",
+    "cves-kafka-client",
+    "cves-observability",
+    "cves-security",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/exposure_validation"]
+
+[tool.uv.sources]
+cves-db-base = { path = "../../libs/db-base", editable = true }
+cves-event-schemas = { path = "../../libs/event-schemas", editable = true }
+cves-kafka-client = { path = "../../libs/kafka-client", editable = true }
+cves-observability = { path = "../../libs/observability", editable = true }
+cves-security = { path = "../../libs/security", editable = true }

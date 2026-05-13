@@ -21,6 +21,9 @@ members = [
     "services/scan-orchestrator",
     "services/discovery-engine",
     "services/runtime-analysis-engine",
+    "services/js-intelligence-engine",
+    "services/exposure-validation-engine",
+    "services/asset-graph-engine",
 ]
 
 [tool.ruff]
