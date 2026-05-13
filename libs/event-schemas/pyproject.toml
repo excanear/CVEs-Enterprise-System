@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cves-event-schemas"
+version = "0.1.0"
+description = "Immutable domain event schemas (Pydantic v2 + Avro-compatible) for all BCs."
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.10.0",
+    "cves-db-base",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cves_event_schemas"]

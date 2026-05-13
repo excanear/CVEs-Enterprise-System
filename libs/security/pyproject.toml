@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cves-security"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "pyjwt[crypto]>=2.9.0",
+    "httpx>=0.28.0",
+    "redis[asyncio]>=5.2.0",
+    "fastapi>=0.115.0",
+    "cves-db-base",
+    "cves-observability",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cves_security"]

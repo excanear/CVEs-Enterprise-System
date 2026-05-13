@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cves-enterprise-platform"
+version = "0.1.0"
+requires-python = ">=3.12"
+readme = "README.md"
+description = "Enterprise Attack Surface Intelligence & Exposure Validation Platform"
+
+# Workspace members are referenced here for uv workspace resolution.
+# Install all libs in dev: uv pip install -e libs/db-base -e libs/event-schemas ...
+[tool.uv.workspace]
+members = [
+    "libs/db-base",
+    "libs/event-schemas",
+    "libs/kafka-client",
+    "libs/observability",
+    "libs/security",
+    "services/scan-orchestrator",
+    "services/discovery-engine",
+    "services/runtime-analysis-engine",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+select = ["E", "F", "I", "B", "UP", "SIM", "S", "BLE001"]
+ignore = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["libs"]

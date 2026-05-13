@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cves-kafka-client"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "confluent-kafka[avro]>=2.6.0",
+    "redis[asyncio]>=5.2.0",
+    "cves-event-schemas",
+    "cves-db-base",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cves_kafka"]
