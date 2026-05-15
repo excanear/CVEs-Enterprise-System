@@ -24,6 +24,8 @@ members = [
     "services/js-intelligence-engine",
     "services/exposure-validation-engine",
     "services/asset-graph-engine",
+    "services/ai-correlation-layer",
+    "services/reporting-engine",
 ]
 
 [tool.ruff]

@@ -1,0 +1,1 @@
+"""Infrastructure — PostgreSQL persistence package."""

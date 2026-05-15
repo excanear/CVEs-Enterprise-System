@@ -227,6 +227,68 @@ services:
       NEO4J_PASSWORD: "neo4j_secret"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
 
+  # ── AI Correlation Layer ──────────────────────────────────────────────
+  ai-correlation-layer:
+    build:
+      context: .
+      dockerfile: services/ai-correlation-layer/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8008:8008"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://cves:cves_secret@postgres:5432/cves_platform"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      REDIS_URL: "redis://redis:6379/1"
+      LLM_ENABLED: "false"
+      LLM_API_KEY: ""
+      LLM_BASE_URL: ""
+      LLM_MODEL: "gpt-4o-mini"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+
+  # ── Reporting Engine ──────────────────────────────────────────────────
+  reporting-engine:
+    build:
+      context: .
+      dockerfile: services/reporting-engine/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8009:8009"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://cves:cves_secret@postgres:5432/cves_platform"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: services/dashboard/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - reporting-engine
+    ports:
+      - "3000:3000"
+    environment:
+      RAE_BASE_URL: "http://runtime-analysis-engine:8004"
+      JSI_BASE_URL: "http://js-intelligence-engine:8005"
+      EVE_BASE_URL: "http://exposure-validation-engine:8006"
+      AGE_BASE_URL: "http://asset-graph-engine:8007"
+      ACL_BASE_URL: "http://ai-correlation-layer:8008"
+      RE_BASE_URL: "http://reporting-engine:8009"
+      SO_BASE_URL: "http://scan-orchestrator:8003"
+      NEXT_PUBLIC_DEFAULT_TENANT_ID: "00000000-0000-0000-0000-000000000001"
+
 volumes:
   postgres_data:
   redis_data:

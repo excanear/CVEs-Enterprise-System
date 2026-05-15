@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "reporting-engine"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "Reporting Engine — executive, technical, compliance, evidence, and remediation reports for CVEs Enterprise System."
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "structlog>=24.4",
+    "confluent-kafka>=2.6",
+    "jinja2>=3.1",
+    "weasyprint>=62.0",
+    "cves-db-base",
+    "cves-event-schemas",
+    "cves-kafka-client",
+    "cves-observability",
+    "cves-security",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reporting"]
+
+[tool.uv.sources]
+cves-db-base = { path = "../../libs/db-base", editable = true }
+cves-event-schemas = { path = "../../libs/event-schemas", editable = true }
+cves-kafka-client = { path = "../../libs/kafka-client", editable = true }
+cves-observability = { path = "../../libs/observability", editable = true }
+cves-security = { path = "../../libs/security", editable = true }

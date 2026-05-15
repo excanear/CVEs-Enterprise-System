@@ -1,0 +1,1 @@
+"""Application layer — algorithms package."""
