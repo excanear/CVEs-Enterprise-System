@@ -1,6 +1,6 @@
 # Runtime Analysis Engine — Dockerfile
 # Base: official Playwright Python image (includes Chromium + all OS deps)
-FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.59.0-jammy
 
 WORKDIR /app
 
