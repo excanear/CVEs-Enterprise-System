@@ -1,0 +1,50 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: cves-enterprise
+    environment: production
+
+scrape_configs:
+  # ── Backend services (backend-net — same network as prometheus) ─────────────
+  - job_name: asset-graph-engine
+    static_configs:
+      - targets: ["asset-graph-engine:8007"]
+        labels:
+          service: asset-graph-engine
+    metrics_path: /metrics
+
+  - job_name: ai-correlation-layer
+    static_configs:
+      - targets: ["ai-correlation-layer:8008"]
+        labels:
+          service: ai-correlation-layer
+    metrics_path: /metrics
+
+  - job_name: reporting-engine
+    static_configs:
+      - targets: ["reporting-engine:8009"]
+        labels:
+          service: reporting-engine
+    metrics_path: /metrics
+
+  # ── OTel Collector (backend-net) ────────────────────────────────────────────
+  # Scanner services (RAE, EVE, JSI, discovery) push OTLP metrics to the OTel
+  # collector. Prometheus scrapes the collector's Prometheus exporter to get
+  # all service metrics, including scanner services on scanner-net.
+
+  # Collector self-metrics (queue depth, dropped spans, etc.)
+  - job_name: otel-collector-internal
+    static_configs:
+      - targets: ["otel-collector:8888"]
+        labels:
+          service: otel-collector
+    metrics_path: /metrics
+
+  # SDK metrics forwarded by ALL services through the collector pipeline
+  - job_name: otel-collector-sdk
+    static_configs:
+      - targets: ["otel-collector:8889"]
+        labels:
+          service: otel-sdk
+    metrics_path: /metrics

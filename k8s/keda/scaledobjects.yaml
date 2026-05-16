@@ -1,0 +1,122 @@
+# ── KEDA ScaledObjects — Kafka Consumer Lag ───────────────────────────────────
+# Services scaled by Kafka consumer lag (KEDA 2.16):
+#   EVE  → jsi.js.events           (consumer group: exposure-validation-engine)
+#   AGE  → asi.asset.events        (consumer group: asset-graph-engine)
+#   ACL  → eve.exposure.events     (consumer group: ai-correlation-layer)
+#   RE   → acl.correlation.events  (consumer group: reporting-engine)
+#
+# KEDA connects to Kafka via plain listener (9092, no TLS/auth) for lag reads.
+# cooldownPeriod: 300s — prevents thrash during burst processing.
+# pollingInterval: 15s — lag checked every 15 seconds.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── EVE: scales 1-10 on jsi.js.events lag ────────────────────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: exposure-validation-engine
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: exposure-validation-engine
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: exposure-validation-engine
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  cooldownPeriod: 300
+  pollingInterval: 15
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: "cves-kafka-kafka-bootstrap.cves-infra.svc.cluster.local:9092"
+        consumerGroup: "exposure-validation-engine"
+        topic: "jsi.js.events"
+        lagThreshold: "10"
+        offsetResetPolicy: "latest"
+
+---
+# ── AGE: scales 2-8 on asi.asset.events lag ──────────────────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: asset-graph-engine
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: asset-graph-engine
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: asset-graph-engine
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  cooldownPeriod: 300
+  pollingInterval: 15
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: "cves-kafka-kafka-bootstrap.cves-infra.svc.cluster.local:9092"
+        consumerGroup: "asset-graph-engine"
+        topic: "asi.asset.events"
+        lagThreshold: "10"
+        offsetResetPolicy: "latest"
+
+---
+# ── ACL: scales 2-8 on eve.exposure.events lag ───────────────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: ai-correlation-layer
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: ai-correlation-layer
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ai-correlation-layer
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  cooldownPeriod: 300
+  pollingInterval: 15
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: "cves-kafka-kafka-bootstrap.cves-infra.svc.cluster.local:9092"
+        consumerGroup: "ai-correlation-layer"
+        topic: "eve.exposure.events"
+        lagThreshold: "5"
+        offsetResetPolicy: "latest"
+
+---
+# ── RE: scales 1-5 on acl.correlation.events lag ─────────────────────────────
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: reporting-engine
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: reporting-engine
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reporting-engine
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  cooldownPeriod: 300
+  pollingInterval: 15
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: "cves-kafka-kafka-bootstrap.cves-infra.svc.cluster.local:9092"
+        consumerGroup: "reporting-engine"
+        topic: "acl.correlation.events"
+        lagThreshold: "10"
+        offsetResetPolicy: "latest"

@@ -1,0 +1,239 @@
+# ── Grafana — Deployment ───────────────────────────────────────────────────────
+# Datasources: Prometheus + Jaeger (auto-provisioned via ConfigMaps).
+# Dashboards: provisioned from ConfigMap (add JSON dashboards as needed).
+# Exposed externally via NGINX Ingress (TLS).
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: cves-platform
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        url: http://prometheus.cves-backend.svc.cluster.local:9090
+        access: proxy
+        isDefault: true
+        jsonData:
+          timeInterval: 15s
+
+      - name: Jaeger
+        type: jaeger
+        uid: jaeger
+        url: http://jaeger.cves-backend.svc.cluster.local:16686
+        access: proxy
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: prometheus
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-provider
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: cves-platform
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: cves-platform
+        orgId: 1
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 60
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  strategy:
+    type: Recreate   # PVC not ReadWriteMany — avoid split-brain on rollout
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/component: observability
+        app.kubernetes.io/part-of: cves-platform
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        nodegroup: general
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.4.0
+          ports:
+            - containerPort: 3001
+              name: http
+          env:
+            - name: GF_SERVER_HTTP_PORT
+              value: "3001"
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: username
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: password
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "false"
+            - name: GF_PATHS_PROVISIONING
+              value: "/etc/grafana/provisioning"
+            - name: GF_PATHS_DATA
+              value: "/var/lib/grafana"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards-storage
+              mountPath: /var/lib/grafana/dashboards
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            readOnlyRootFilesystem: false   # Grafana writes sqlite DB to /var/lib/grafana
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboards-provider
+        - name: dashboards-storage
+          emptyDir: {}  # Mount JSON dashboards via additional ConfigMaps if needed
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: grafana-data
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  selector:
+    app.kubernetes.io/name: grafana
+  ports:
+    - port: 3001
+      targetPort: http
+      name: http
+  type: ClusterIP
+
+---
+# ── Ingress — Grafana (external access) ──────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: cves-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    # Uncomment to enable cert-manager:
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  # tls:
+  #   - hosts:
+  #       - grafana.yourdomain.com
+  #     secretName: grafana-tls
+  rules:
+    - host: grafana.yourdomain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  name: http

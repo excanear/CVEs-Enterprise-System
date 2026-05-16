@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cves-rule-engine"
+version = "0.1.0"
+description = "Enterprise Rule Engine — YAML rules, detection policies, risk scoring, suppression, correlation, custom validators"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.10.0",
+    "pyyaml>=6.0",
+    "regex>=2024.0",
+    "structlog>=24.4.0",
+    "cves-event-schemas",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cves_rules"]
+
+[tool.uv.sources]
+cves-event-schemas = { path = "../../libs/event-schemas", editable = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

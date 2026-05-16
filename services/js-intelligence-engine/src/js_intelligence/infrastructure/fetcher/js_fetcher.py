@@ -1,29 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import logging
 import re
-import socket
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
 
+from cves_security.ssrf import SafeAsyncClient, ssrf_check as _ssrf_check
+
 log = logging.getLogger(__name__)
-
-# SSRF guard — same private ranges used across all services
-_PRIVATE_NETS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local / AWS metadata
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-]
-
-_BLOCKED_SCHEMES = {"file", "ftp", "ftps", "ldap", "ldaps", "dict", "gopher"}
 
 # Regex to extract X-SourceMap / SourceMap header and inline sourceMappingURL
 _SOURCE_MAP_URL_RE = re.compile(
@@ -40,31 +27,6 @@ _JS_CONTENT_TYPES = {
 
 _DEFAULT_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 _DEFAULT_MAX_REDIRECTS = 3
-
-
-def _is_private_ip(hostname: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(socket.gethostbyname(hostname))
-        return any(ip in net for net in _PRIVATE_NETS)
-    except Exception:
-        return True  # fail-closed: treat unresolvable as private
-
-
-def _ssrf_check(url: str) -> None:
-    """Raise ValueError if the URL targets a private/internal address."""
-    try:
-        parsed = urlparse(url)
-    except Exception as exc:
-        raise ValueError(f"Malformed URL: {url!r}") from exc
-
-    if parsed.scheme in _BLOCKED_SCHEMES:
-        raise ValueError(f"Blocked scheme {parsed.scheme!r} in URL: {url!r}")
-
-    if not parsed.hostname:
-        raise ValueError(f"No hostname in URL: {url!r}")
-
-    if _is_private_ip(parsed.hostname):
-        raise ValueError(f"SSRF blocked — private/internal target: {url!r}")
 
 
 @dataclass(frozen=True)
@@ -96,7 +58,7 @@ class JSFetcher:
         timeout: httpx.Timeout = _DEFAULT_TIMEOUT,
     ) -> None:
         self._max_size = max_file_size_bytes
-        self._client = httpx.AsyncClient(
+        self._client = SafeAsyncClient(
             follow_redirects=True,
             max_redirects=_DEFAULT_MAX_REDIRECTS,
             timeout=timeout,

@@ -1,0 +1,196 @@
+# ── HorizontalPodAutoscalers — CPU-based scaling ─────────────────────────────
+# Services scaled by CPU utilization (native HPA, no KEDA dependency):
+#   discovery-engine     — HTTP trigger, stateless   (min=2, max=10, CPU 70%)
+#   scan-orchestrator    — HTTP trigger, coordinator (min=2, max=5,  CPU 70%)
+#   runtime-analysis-engine — Playwright pool        (min=1, max=20, CPU 70%)
+#   js-intelligence-engine  — HTTP trigger           (min=1, max=15, CPU 70%)
+#   dashboard               — Next.js SSR            (min=2, max=10, CPU 60%)
+#
+# NOTE: KEDA-managed services (EVE, AGE, ACL, RE) must NOT have HPAs —
+#       KEDA manages the HPA internally via ScaledObject.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: discovery-engine
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: discovery-engine
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: discovery-engine
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: scan-orchestrator
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: scan-orchestrator
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: scan-orchestrator
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: runtime-analysis-engine
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: runtime-analysis-engine
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: runtime-analysis-engine
+  minReplicas: 1
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # Playwright pods take longer to warm up — be conservative on ramp
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      # Allow Chromium pools to drain gracefully
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 180
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: js-intelligence-engine
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: js-intelligence-engine
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: js-intelligence-engine
+  minReplicas: 1
+  maxReplicas: 15
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 120
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: dashboard
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: dashboard
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: dashboard
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

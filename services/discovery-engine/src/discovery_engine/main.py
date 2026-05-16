@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from cves_db.rls import install_rls_hook
 from cves_db.session import AsyncSessionFactory
 from cves_observability.health import HealthRouter
+from cves_observability.instrumentation import instrument_app
 from cves_observability.logging import setup_logging
 from cves_observability.tracing import setup_tracing
 
@@ -115,7 +116,8 @@ def create_app() -> FastAPI:
     )
     health = HealthRouter(service_name=SERVICE_NAME, version=SERVICE_VERSION, checks={})
     app.include_router(router)
-    app.include_router(health.build())
+    app.include_router(health.router)
+    instrument_app(app, service_name=SERVICE_NAME)
     return app
 
 

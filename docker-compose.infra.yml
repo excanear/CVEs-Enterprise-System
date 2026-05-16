@@ -23,6 +23,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - infra-net
 
   # ── Zookeeper (required by Kafka) ──────────────────────────────────────
   zookeeper:
@@ -33,6 +35,8 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    networks:
+      - infra-net
 
   # ── Kafka ──────────────────────────────────────────────────────────────
   kafka:
@@ -59,6 +63,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    networks:
+      - infra-net
 
   # ── Confluent Schema Registry ─────────────────────────────────────────
   schema-registry:
@@ -72,6 +78,8 @@ services:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "kafka:29092"
       SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
+    networks:
+      - infra-net
 
   # ── Redis ─────────────────────────────────────────────────────────────
   redis:
@@ -87,6 +95,8 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    networks:
+      - infra-net
 
   # ── Neo4j ─────────────────────────────────────────────────────────────
   neo4j:
@@ -100,6 +110,8 @@ services:
       NEO4J_PLUGINS: '["apoc"]'
     volumes:
       - neo4j_data:/data
+    networks:
+      - infra-net
 
   # ── OpenSearch ────────────────────────────────────────────────────────
   opensearch:
@@ -124,17 +136,23 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    networks:
+      - infra-net
 
   # ── OTel Collector ────────────────────────────────────────────────────
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.111.0
     restart: unless-stopped
     ports:
-      - "4317:4317"   # gRPC
-      - "4318:4318"   # HTTP
-      - "8888:8888"   # Prometheus metrics
+      - "4317:4317"   # gRPC OTLP receiver
+      - "4318:4318"   # HTTP OTLP receiver
+      - "8888:8888"   # Collector self-metrics (Prometheus scrape)
+      - "8889:8889"   # SDK metrics forwarded to Prometheus
     volumes:
       - ./infra/otel-collector-config.yml:/etc/otelcol-contrib/config.yaml:ro
+    networks:
+      - backend-net
+      - scanner-net
 
   # ── Jaeger ────────────────────────────────────────────────────────────
   jaeger:
@@ -142,7 +160,50 @@ services:
     restart: unless-stopped
     ports:
       - "16686:16686"  # UI
-      - "14250:14250"  # gRPC from OTel collector
+      - "4320:4317"    # OTLP/gRPC from OTel collector (host-side renamed to avoid clash)
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks:
+      - backend-net
+
+  # ── Prometheus ────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+      - "--web.enable-remote-write-receiver"
+    networks:
+      - backend-net
+
+  # ── Grafana ───────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.3.0
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - jaeger
+    ports:
+      - "3001:3000"   # UI (3000 is taken by the dashboard service)
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: cves_grafana_secret
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - backend-net
 
   # ── Runtime Analysis Engine ───────────────────────────────────────────
   runtime-analysis-engine:
@@ -162,7 +223,19 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
       BROWSER_POOL_SIZE: "3"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      HTTP_PROXY: "http://squid:3128"
+      HTTPS_PROXY: "http://squid:3128"
+      NO_PROXY: "kafka,postgres,redis,neo4j,opensearch,otel-collector,localhost,127.0.0.1"
     shm_size: "2gb"   # Chromium needs shared memory
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:infra/seccomp/browser-service.json
+    cap_drop:
+      - ALL
+    networks:
+      - scanner-net
+      - infra-net
 
   # ── JS Intelligence Engine ────────────────────────────────────────────
   js-intelligence-engine:
@@ -181,6 +254,18 @@ services:
       DATABASE_URL: "postgresql+asyncpg://cves:cves_secret@postgres:5432/cves_platform"
       KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      HTTP_PROXY: "http://squid:3128"
+      HTTPS_PROXY: "http://squid:3128"
+      NO_PROXY: "kafka,postgres,redis,neo4j,opensearch,otel-collector,localhost,127.0.0.1"
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:infra/seccomp/python-service.json
+    cap_drop:
+      - ALL
+    networks:
+      - scanner-net
+      - infra-net
 
   # ── Exposure Validation Engine ────────────────────────────────────────
   exposure-validation-engine:
@@ -202,7 +287,19 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
       REDIS_URL: "redis://redis:6379/0"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      HTTP_PROXY: "http://squid:3128"
+      HTTPS_PROXY: "http://squid:3128"
+      NO_PROXY: "kafka,postgres,redis,neo4j,opensearch,otel-collector,localhost,127.0.0.1"
     shm_size: "1gb"   # Playwright on-demand needs shared memory
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:infra/seccomp/browser-service.json
+    cap_drop:
+      - ALL
+    networks:
+      - scanner-net
+      - infra-net
 
   # ── Asset Graph Engine ────────────────────────────────────────────────
   asset-graph-engine:
@@ -226,6 +323,15 @@ services:
       NEO4J_USER: "neo4j"
       NEO4J_PASSWORD: "neo4j_secret"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:infra/seccomp/python-service.json
+    cap_drop:
+      - ALL
+    networks:
+      - backend-net
+      - infra-net
 
   # ── AI Correlation Layer ──────────────────────────────────────────────
   ai-correlation-layer:
@@ -251,6 +357,15 @@ services:
       LLM_BASE_URL: ""
       LLM_MODEL: "gpt-4o-mini"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:infra/seccomp/python-service.json
+    cap_drop:
+      - ALL
+    networks:
+      - backend-net
+      - infra-net
 
   # ── Reporting Engine ──────────────────────────────────────────────────
   reporting-engine:
@@ -269,6 +384,15 @@ services:
       DATABASE_URL: "postgresql+asyncpg://cves:cves_secret@postgres:5432/cves_platform"
       KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+    user: "1001:1001"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:infra/seccomp/python-service.json
+    cap_drop:
+      - ALL
+    networks:
+      - backend-net
+      - infra-net
 
   dashboard:
     build:
@@ -288,9 +412,40 @@ services:
       RE_BASE_URL: "http://reporting-engine:8009"
       SO_BASE_URL: "http://scan-orchestrator:8003"
       NEXT_PUBLIC_DEFAULT_TENANT_ID: "00000000-0000-0000-0000-000000000001"
+    networks:
+      - backend-net
+
+  # ── Squid egress proxy ────────────────────────────────────────────────
+  squid:
+    image: ubuntu/squid:6.6-24.04_beta
+    restart: unless-stopped
+    volumes:
+      - ./infra/squid/squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - scanner-net
 
 volumes:
   postgres_data:
   redis_data:
   neo4j_data:
   opensearch_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  # infra-net: internal-only — DB, Kafka, Redis, Neo4j, OpenSearch
+  # No container on this network has internet access
+  infra-net:
+    internal: true
+    driver: bridge
+
+  # backend-net: internal-only — platform microservices, monitoring
+  # Scanner services are NOT on this network; compromise is contained
+  backend-net:
+    internal: true
+    driver: bridge
+
+  # scanner-net: can reach internet — discovery, RAE, EVE, JSI, squid
+  # Scanner services probe external targets through this network
+  scanner-net:
+    driver: bridge

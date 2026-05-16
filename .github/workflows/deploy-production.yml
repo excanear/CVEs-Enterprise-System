@@ -1,0 +1,177 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Deploy — Production
+#  Trigger: release tag v*.*.*  (requires manual approval via environment gate)
+# ─────────────────────────────────────────────────────────────────────────────
+name: Deploy Production
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
+
+permissions:
+  contents: read
+  deployments: write
+  id-token: write
+
+jobs:
+  # Validate the tag before doing anything destructive.
+  validate-tag:
+    name: Validate Release Tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      image_tag: ${{ steps.parse.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse and validate semver tag
+        id: parse
+        run: |
+          TAG="${{ github.ref_name }}"
+          # Ensure tag matches semver
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+            echo "ERROR: Tag '$TAG' is not a valid semver release tag."
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Deploying version: ${VERSION}"
+
+      - name: Verify tag is on main branch
+        run: |
+          TAG="${{ github.ref_name }}"
+          # Check that the tagged commit exists on main
+          git fetch origin main --depth=1
+          MAIN_SHA=$(git rev-parse origin/main)
+          TAG_SHA=$(git rev-parse "$TAG")
+          if ! git merge-base --is-ancestor "$TAG_SHA" "$MAIN_SHA" 2>/dev/null; then
+            if [[ "$TAG_SHA" != "$MAIN_SHA" ]]; then
+              echo "WARNING: Tag $TAG is not on the tip of main (this may be a backport release)."
+            fi
+          fi
+
+  # Pre-production: run a final smoke test on staging before production approval.
+  staging-gate:
+    name: Verify Staging Health
+    needs: validate-tag
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Staging health check
+        run: |
+          STAGING_URL="${{ vars.STAGING_URL }}"
+          if [[ -z "$STAGING_URL" ]]; then
+            echo "STAGING_URL not configured — skipping staging gate."
+            exit 0
+          fi
+          STATUS=$(curl -o /dev/null -s -w "%{http_code}" --max-time 15 "${STAGING_URL}/health" || echo "000")
+          if [[ "$STATUS" != "200" ]]; then
+            echo "ERROR: Staging not healthy (HTTP ${STATUS}). Aborting production deploy."
+            exit 1
+          fi
+          echo "Staging healthy (HTTP ${STATUS}) — proceeding to production."
+
+  # Production deploy (requires manual approval via GitHub Environment protection rules).
+  deploy:
+    name: Deploy → Production
+    needs: [validate-tag, staging-gate]
+    uses: ./.github/workflows/_reusable-deploy.yml
+    with:
+      environment: production
+      image_tag: ${{ needs.validate-tag.outputs.image_tag }}
+      namespace: cves-production
+      k8s_context: ""
+      smoke_test_url: ${{ vars.PRODUCTION_URL }}
+    secrets:
+      KUBECONFIG_B64: ${{ secrets.PRODUCTION_KUBECONFIG_B64 }}
+
+  # Create GitHub Release with changelog + artifact links.
+  create-release:
+    name: Create GitHub Release
+    needs: [validate-tag, deploy]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog since last tag
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [[ -n "$PREV_TAG" ]]; then
+            LOG=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges)
+          else
+            LOG=$(git log HEAD --pretty=format:"- %s (%h)" --no-merges | head -20)
+          fi
+          {
+            echo "CHANGELOG<<EOF"
+            echo "$LOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "CVEs Enterprise System ${{ needs.validate-tag.outputs.version }}"
+          body: |
+            ## What's Changed
+
+            ${{ steps.changelog.outputs.CHANGELOG }}
+
+            ## Container Images
+
+            All images are available at `ghcr.io/${{ github.repository_owner }}/cves-<service>:${{ github.ref_name }}`
+
+            Images are signed with Cosign (keyless / Sigstore) and have SPDX + CycloneDX SBOMs attached.
+
+            ## Verification
+
+            ```bash
+            # Verify image signature
+            cosign verify ghcr.io/${{ github.repository_owner }}/cves-scan-orchestrator:${{ github.ref_name }} \
+              --certificate-identity-regexp="https://github.com/${{ github.repository }}/.github/workflows/build.yml" \
+              --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
+
+            # Inspect SBOM attestation
+            cosign verify-attestation \
+              --type spdxjson \
+              ghcr.io/${{ github.repository_owner }}/cves-scan-orchestrator:${{ github.ref_name }} \
+              --certificate-identity-regexp="https://github.com/${{ github.repository }}/.github/workflows/build.yml" \
+              --certificate-oidc-issuer="https://token.actions.githubusercontent.com"
+            ```
+          generate_release_notes: false
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc.') }}
+
+  notify:
+    name: Notify Slack — Production
+    runs-on: ubuntu-24.04
+    needs: [validate-tag, deploy, create-release]
+    if: always()
+    steps:
+      - name: Slack notification
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_PRODUCTION }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "${{ needs.deploy.result == 'success' && ':rocket: *Production deploy succeeded*' || ':fire: *Production deploy FAILED*' }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ needs.deploy.result == 'success' && ':rocket:' || ':fire:' }} *Production ${{ needs.validate-tag.outputs.version }}*\n*Status:* ${{ needs.deploy.result }}\n*Actor:* ${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}|Release Notes> · <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Run>"
+                  }
+                }
+              ]
+            }

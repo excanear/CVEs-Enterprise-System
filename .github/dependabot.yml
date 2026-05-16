@@ -1,0 +1,170 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Dependabot — automated dependency updates
+# ─────────────────────────────────────────────────────────────────────────────
+version: 2
+
+updates:
+  # ── Root Python workspace (uv / pip) ───────────────────────────────────────
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 10
+    groups:
+      pydantic:
+        patterns: ["pydantic*"]
+      fastapi:
+        patterns: ["fastapi", "uvicorn*", "httpx", "starlette*"]
+      sqlalchemy:
+        patterns: ["sqlalchemy*", "alembic*", "asyncpg*"]
+      redis:
+        patterns: ["redis*"]
+      observability:
+        patterns: ["opentelemetry*", "prometheus*"]
+      testing:
+        patterns: ["pytest*", "coverage*", "locust*", "playwright*"]
+      security-tools:
+        patterns: ["bandit*", "semgrep*", "pip-audit*"]
+    ignore:
+      # Pin confluent-kafka — C-extension; test compatibility before upgrade
+      - dependency-name: "confluent-kafka"
+        update-types: ["version-update:semver-major"]
+      # Don't auto-bump scikit-learn major (DBSCAN API changes)
+      - dependency-name: "scikit-learn"
+        update-types: ["version-update:semver-major"]
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps(python)"
+
+  # ── Dashboard (Next.js) ────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: "/services/dashboard"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:30"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 10
+    groups:
+      react:
+        patterns: ["react", "react-dom", "@types/react*"]
+      nextjs:
+        patterns: ["next", "@next/*"]
+      ui-libs:
+        patterns: ["@radix-ui/*", "tailwindcss*", "clsx*"]
+      testing:
+        patterns: ["@playwright/*", "vitest*", "@testing-library/*"]
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "deps(dashboard)"
+
+  # ── GitHub Actions ─────────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "07:00"
+      timezone: "America/Sao_Paulo"
+    open-pull-requests-limit: 10
+    groups:
+      actions-core:
+        patterns: ["actions/*"]
+      docker-actions:
+        patterns: ["docker/*"]
+      security-actions:
+        patterns: ["aquasecurity/*", "sigstore/*", "anchore/*", "ossf/*", "gitleaks/*", "github/*"]
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "deps(actions)"
+
+  # ── Docker base images ─────────────────────────────────────────────────────
+  - package-ecosystem: docker
+    directory: "/services/scan-orchestrator"
+    schedule:
+      interval: weekly
+      day: wednesday
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: docker
+    directory: "/services/discovery-engine"
+    schedule:
+      interval: weekly
+      day: wednesday
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: docker
+    directory: "/services/ai-correlation-layer"
+    schedule:
+      interval: weekly
+      day: wednesday
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: docker
+    directory: "/services/asset-graph-engine"
+    schedule:
+      interval: weekly
+      day: wednesday
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: docker
+    directory: "/services/reporting-engine"
+    schedule:
+      interval: weekly
+      day: wednesday
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: docker
+    directory: "/services/runtime-analysis-engine"
+    schedule:
+      interval: weekly
+      day: wednesday
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: docker
+    directory: "/services/js-intelligence-engine"
+    schedule:
+      interval: weekly
+      day: wednesday
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: docker
+    directory: "/services/exposure-validation-engine"
+    schedule:
+      interval: weekly
+      day: wednesday
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: docker
+    directory: "/services/dashboard"
+    schedule:
+      interval: weekly
+      day: wednesday
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"

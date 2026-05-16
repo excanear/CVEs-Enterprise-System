@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cves-cli"
+version = "0.1.0"
+description = "Enterprise ASM Platform — Command-Line Interface"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+
+dependencies = [
+    "typer[all]>=0.12",
+    "rich>=13.7",
+    "textual>=0.74",
+    "httpx[http2]>=0.28",
+    "anyio[trio]>=4.4",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "orjson>=3.10",
+    "keyring>=25",
+    "PyJWT[cryptography]>=2.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "respx>=0.22",
+]
+
+[project.scripts]
+cves = "cves_cli.main:app"
+
+[project.entry-points."cves.plugins"]
+# Third-party plugins register here:
+# my-plugin = "my_plugin:MyPlugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cves_cli"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

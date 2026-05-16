@@ -1,0 +1,363 @@
+# ── Kafka Topics — CVEs Enterprise Platform ───────────────────────────────────
+# Managed by Strimzi Entity Operator (KafkaTopic CRs).
+# Apply AFTER the Kafka cluster is Ready:
+#   kubectl wait kafka/cves-kafka -n cves-infra --for=condition=Ready --timeout=300s
+#
+# Topic naming: <service-prefix>.<entity>.<events>
+# Partition counts set to allow horizontal consumer scaling up to max replicas.
+# Retry topology per message: .retry.1 (30s) → .retry.2 (5min) → .dlq (permanent)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── asi.asset.events (12 partitions — highest volume: discovery + RAE → AGE) ─
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: asi.asset.events
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"       # 7 days
+    min.insync.replicas: "2"
+    compression.type: lz4
+    cleanup.policy: delete
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: asi.asset.events.retry.1
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "1800000"         # 30 min (allows 30s backoff + buffer)
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: asi.asset.events.retry.2
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "7200000"         # 2 hours (allows 5min backoff + buffer)
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: asi.asset.events.dlq
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "2592000000"      # 30 days (DLQ — long retention for investigation)
+    min.insync.replicas: "2"
+
+# ── rf.fingerprint.events (12 partitions — RAE → AGE + EVE) ──────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: rf.fingerprint.events
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: rf.fingerprint.events.retry.1
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "1800000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: rf.fingerprint.events.retry.2
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "7200000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: rf.fingerprint.events.dlq
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "2592000000"
+    min.insync.replicas: "2"
+
+# ── jsi.js.events (6 partitions — JSI → AGE + EVE) ───────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: jsi.js.events
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: jsi.js.events.retry.1
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 2
+  replicas: 3
+  config:
+    retention.ms: "1800000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: jsi.js.events.retry.2
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 2
+  replicas: 3
+  config:
+    retention.ms: "7200000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: jsi.js.events.dlq
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "2592000000"
+    min.insync.replicas: "2"
+
+# ── eve.exposure.events (6 partitions — EVE → AGE + ACL) ─────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: eve.exposure.events
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: eve.exposure.events.retry.1
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 2
+  replicas: 3
+  config:
+    retention.ms: "1800000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: eve.exposure.events.retry.2
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 2
+  replicas: 3
+  config:
+    retention.ms: "7200000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: eve.exposure.events.dlq
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "2592000000"
+    min.insync.replicas: "2"
+
+# ── age.graph.events (3 partitions — AGE → ACL) ───────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: age.graph.events
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: age.graph.events.retry.1
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "1800000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: age.graph.events.retry.2
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "7200000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: age.graph.events.dlq
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "2592000000"
+    min.insync.replicas: "2"
+
+# ── acl.correlation.events (3 partitions — ACL → RE) ─────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: acl.correlation.events
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    min.insync.replicas: "2"
+    compression.type: lz4
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: acl.correlation.events.retry.1
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "1800000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: acl.correlation.events.retry.2
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "7200000"
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: acl.correlation.events.dlq
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+spec:
+  partitions: 1
+  replicas: 3
+  config:
+    retention.ms: "2592000000"
+    min.insync.replicas: "2"

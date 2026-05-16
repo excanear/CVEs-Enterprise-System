@@ -1,0 +1,94 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Deploy — Staging
+#  Trigger: Build workflow completes successfully on main
+# ─────────────────────────────────────────────────────────────────────────────
+name: Deploy Staging
+
+on:
+  workflow_run:
+    workflows: [Build]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+  deployments: write
+  id-token: write
+
+jobs:
+  guard:
+    name: Guard — Build must have succeeded
+    runs-on: ubuntu-24.04
+    if: github.event.workflow_run.conclusion == 'success'
+    outputs:
+      image_tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Compute image tag
+        id: tag
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          SHORT="${SHA:0:7}"
+          echo "tag=sha-${SHORT}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy → Staging
+    needs: guard
+    uses: ./.github/workflows/_reusable-deploy.yml
+    with:
+      environment: staging
+      image_tag: ${{ needs.guard.outputs.image_tag }}
+      namespace: cves-staging
+      k8s_context: ""
+      smoke_test_url: ${{ vars.STAGING_URL }}
+    secrets:
+      KUBECONFIG_B64: ${{ secrets.STAGING_KUBECONFIG_B64 }}
+
+  notify-success:
+    name: Notify Slack — Staging OK
+    runs-on: ubuntu-24.04
+    needs: deploy
+    if: success()
+    steps:
+      - name: Slack notification
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_STAGING }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":white_check_mark: *Staging deploy succeeded*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ":white_check_mark: *Staging deploy succeeded*\n*Commit:* `${{ github.event.workflow_run.head_sha }}`\n*Actor:* ${{ github.event.workflow_run.triggering_actor.login }}\n*Env:* ${{ vars.STAGING_URL }}"
+                  }
+                }
+              ]
+            }
+
+  notify-failure:
+    name: Notify Slack — Staging FAILED
+    runs-on: ubuntu-24.04
+    needs: deploy
+    if: failure()
+    steps:
+      - name: Slack notification
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_STAGING }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":x: *Staging deploy FAILED*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ":x: *Staging deploy FAILED*\n*Commit:* `${{ github.event.workflow_run.head_sha }}`\n*Actor:* ${{ github.event.workflow_run.triggering_actor.login }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                  }
+                }
+              ]
+            }

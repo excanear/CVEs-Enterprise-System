@@ -30,6 +30,11 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8007
 
+RUN addgroup --system --gid 1001 cves \
+    && adduser --system --uid 1001 --gid 1001 --no-create-home cves \
+    && chown -R cves:cves /app
+USER 1001
+
 EXPOSE 8007
 
 CMD ["python", "-m", "uvicorn", "asset_graph.main:app", \

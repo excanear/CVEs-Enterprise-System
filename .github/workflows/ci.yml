@@ -1,0 +1,394 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  CI — Lint · Type · SAST · Dependency Audit · Tests · Coverage Gate
+#  Triggers: push to main/develop, every PR targeting main
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.5.14"
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/cves
+
+permissions:
+  contents: read
+  security-events: write   # for SARIF uploads
+  pull-requests: write     # for coverage comment
+
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+
+# ── 1. Secret Scanning ───────────────────────────────────────────────────────
+  secret-scan:
+    name: Secret Scan (Gitleaks)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for gitleaks
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+# ── 2. Lint ──────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (Ruff)
+    runs-on: ubuntu-24.04
+    needs: secret-scan
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install ruff
+        run: uv tool install ruff
+
+      - name: Ruff — format check
+        run: ruff format --check .
+
+      - name: Ruff — lint
+        run: ruff check --output-format=github .
+
+# ── 3. Type Check ────────────────────────────────────────────────────────────
+  type-check:
+    name: Type Check (mypy)
+    runs-on: ubuntu-24.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Restore uv cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+
+      - name: Install workspace (all members)
+        run: |
+          uv sync --all-extras --dev
+
+      - name: mypy — strict mode
+        run: |
+          uv run mypy \
+            libs/db-base/src \
+            libs/event-schemas/src \
+            libs/kafka-client/src \
+            libs/observability/src \
+            libs/security/src \
+            services/scan-orchestrator/src \
+            services/discovery-engine/src \
+            services/runtime-analysis-engine/src \
+            services/js-intelligence-engine/src \
+            services/exposure-validation-engine/src \
+            services/asset-graph-engine/src \
+            services/ai-correlation-layer/src \
+            services/reporting-engine/src \
+            --config-file pyproject.toml
+
+# ── 4. SAST ──────────────────────────────────────────────────────────────────
+  sast:
+    name: SAST (Bandit + Semgrep)
+    runs-on: ubuntu-24.04
+    needs: secret-scan
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install analysis tools
+        run: uv tool install bandit[toml] semgrep
+
+      - name: Bandit — Python SAST
+        run: |
+          bandit -r libs/ services/ \
+            -f sarif \
+            -o bandit.sarif \
+            --severity-level medium \
+            --confidence-level medium \
+            -x "*/tests/*,*/test_*.py,*/conftest.py,*/migrations/*"
+
+      - name: Upload Bandit SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+      - name: Semgrep — rule-based SAST
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          semgrep scan \
+            --config "p/python" \
+            --config "p/owasp-top-ten" \
+            --config "p/secrets" \
+            --config "p/jwt" \
+            --sarif \
+            --output semgrep.sarif \
+            --exclude "tests/" \
+            --exclude "*/migrations/*" \
+            . || true
+
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+# ── 5. Dependency Audit ───────────────────────────────────────────────────────
+  dependency-audit:
+    name: Dependency Audit (pip-audit)
+    runs-on: ubuntu-24.04
+    needs: secret-scan
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Generate requirements for audit
+        run: |
+          uv export --format requirements-txt --all-extras > /tmp/all-requirements.txt
+
+      - name: pip-audit — vulnerability scan
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: /tmp/all-requirements.txt
+          vulnerability-service: osv
+          fail-on-cvss: "7.0"    # fail on HIGH + CRITICAL only
+
+      - name: pip-licenses — licence compliance
+        run: |
+          uv tool install pip-licenses
+          uv run pip-licenses \
+            --format=json \
+            --with-urls \
+            --output-file=licenses.json
+          # Fail on known prohibited licences
+          python - <<'EOF'
+          import json, sys
+          BLOCKED = {"GPL-2.0", "GPL-3.0", "AGPL-3.0", "LGPL-2.1", "LGPL-3.0"}
+          data = json.load(open("licenses.json"))
+          violations = [p for p in data if p.get("License") in BLOCKED]
+          if violations:
+              print("BLOCKED licences found:")
+              for v in violations:
+                  print(f"  {v['Name']} {v['Version']}: {v['License']}")
+              sys.exit(1)
+          print("Licence check passed.")
+          EOF
+
+      - name: Upload licence report
+        uses: actions/upload-artifact@v4
+        with:
+          name: licenses-report
+          path: licenses.json
+
+# ── 6. Unit + Async + Contract + Event-Driven Tests ──────────────────────────
+  unit-tests:
+    name: Unit / Async / Contract Tests
+    runs-on: ubuntu-24.04
+    needs: [lint, type-check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Restore uv cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+
+      - name: Install workspace
+        run: uv sync --all-extras --dev
+
+      - name: Run unit / async / contract / event-driven tests
+        run: |
+          uv run pytest \
+            -m "unit or async_svc or contract or event_driven" \
+            --tb=short \
+            --cov \
+            --cov-report=xml:coverage-unit.xml \
+            --cov-report=term-missing \
+            --junit-xml=junit-unit.xml \
+            -q
+
+      - name: Upload unit coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage-unit.xml
+          flags: unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-unit
+          path: junit-unit.xml
+
+# ── 7. Integration Tests (with real infrastructure) ──────────────────────────
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-24.04
+    needs: unit-tests
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cves
+          POSTGRES_PASSWORD: cves_dev_password
+          POSTGRES_DB: cves_test
+        options: >-
+          --health-cmd "pg_isready -U cves"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+      kafka:
+        image: confluentinc/cp-kafka:7.7.1
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+          CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qg"
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+        ports:
+          - 9092:9092
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://cves:cves_dev_password@localhost:5432/cves_test
+      REDIS_URL: redis://localhost:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Restore uv cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+
+      - name: Install workspace
+        run: uv sync --all-extras --dev
+
+      - name: Run integration tests
+        run: |
+          uv run pytest \
+            -m "integration" \
+            --tb=short \
+            --cov \
+            --cov-report=xml:coverage-integration.xml \
+            --junit-xml=junit-integration.xml \
+            -q
+
+      - name: Upload integration coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage-integration.xml
+          flags: integration
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-integration
+          path: junit-integration.xml
+
+# ── 8. Coverage Gate ─────────────────────────────────────────────────────────
+  coverage-gate:
+    name: Coverage Gate (≥ 80%)
+    runs-on: ubuntu-24.04
+    needs: [unit-tests, integration-tests]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: junit-*
+          merge-multiple: true
+
+      - name: Restore uv cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+
+      - name: Install workspace
+        run: uv sync --all-extras --dev
+
+      - name: Measure combined coverage
+        run: |
+          uv run pytest \
+            -m "unit or async_svc or contract or event_driven" \
+            --cov \
+            --cov-report=term-missing \
+            --cov-fail-under=80 \
+            -q --no-header
+
+      - name: Comment coverage on PR
+        uses: py-cov-action/python-coverage-comment-action@v3
+        if: github.event_name == 'pull_request'
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINIMUM_GREEN: 80
+          MINIMUM_ORANGE: 70

@@ -17,6 +17,7 @@ members = [
     "libs/event-schemas",
     "libs/kafka-client",
     "libs/observability",
+    "libs/rule-engine",
     "libs/security",
     "services/scan-orchestrator",
     "services/discovery-engine",
@@ -41,4 +42,32 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["libs"]
+testpaths = ["tests", "libs"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "unit: pure domain logic, no I/O",
+    "integration: real DB / Redis (requires docker-compose.infra.yml)",
+    "async_svc: asyncio application service tests",
+    "contract: Kafka event schema contracts",
+    "event_driven: Kafka consumer/producer pipeline",
+    "e2e: Playwright browser tests (requires running app)",
+    "performance: Locust / load tests (run separately)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:confluent_kafka",
+    "ignore::DeprecationWarning:asyncpg",
+]
+
+[tool.coverage.run]
+source = ["services", "libs"]
+omit = ["*/migrations/*", "*/alembic/*", "*/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@overload",
+    "raise NotImplementedError",
+]

@@ -1,0 +1,160 @@
+# ── AI Correlation Layer — Deployment ────────────────────────────────────────
+# Kafka consumer (eve.exposure.events). KEDA scales on consumer lag.
+# Uses Redis (DB 1) for deduplication / rate-limit cache for LLM calls.
+# LLM calls (OpenAI API) go via Squid in backend namespace.
+# Note: backend namespace services don't use Squid for intra-cluster traffic
+#       but LLM_ENABLED=false by default; enable with secret + env override.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-correlation-layer
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: ai-correlation-layer
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: cves-platform
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-correlation-layer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-correlation-layer
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: cves-platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8008"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: ai-correlation-layer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        nodegroup: general
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: ai-correlation-layer
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: ai-correlation-layer
+          image: ghcr.io/cves-enterprise/ai-correlation-layer:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8008
+              name: http
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cves-platform-secrets
+                  key: database-url
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cves-platform-secrets
+                  key: llm-api-key
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "cves-kafka-kafka-bootstrap.cves-infra.svc.cluster.local:9092"
+            - name: REDIS_URL
+              # DB 1 — separate from EVE (DB 0) to avoid key collisions
+              value: "redis+sentinel://cves-redis.cves-infra.svc.cluster.local:26379/mymaster/1"
+            - name: LLM_ENABLED
+              value: "false"
+            - name: LLM_MODEL
+              value: "gpt-4o-mini"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.cves-backend.svc.cluster.local:4317"
+            - name: OTEL_SERVICE_NAME
+              value: "ai-correlation-layer"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PORT
+              value: "8008"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-correlation-layer
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: ai-correlation-layer
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  selector:
+    app.kubernetes.io/name: ai-correlation-layer
+  ports:
+    - port: 8008
+      targetPort: http
+      name: http
+  type: ClusterIP
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ai-correlation-layer
+  namespace: cves-backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-correlation-layer

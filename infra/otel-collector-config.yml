@@ -7,21 +7,47 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
+  memory_limiter:
+    limit_mib: 512
+    check_interval: 5s
   batch:
     timeout: 5s
     send_batch_size: 1024
+  resource:
+    attributes:
+      - action: upsert
+        key: deployment.environment
+        value: production
 
 exporters:
-  jaeger:
-    endpoint: jaeger:14250
+  # Traces → Jaeger via OTLP/gRPC (Jaeger all-in-one ≥1.35 accepts OTLP natively)
+  otlp/jaeger:
+    endpoint: jaeger:4317
     tls:
       insecure: true
-  logging:
-    loglevel: warn
+
+  # Metrics → exposed as a Prometheus scrape endpoint on :8889
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: cves
+    enable_open_metrics: true
+
+  # Collector self-telemetry (warnings only)
+  debug:
+    verbosity: basic
 
 service:
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888   # collector own Prometheus metrics
+
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
-      exporters: [jaeger, logging]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/jaeger]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]

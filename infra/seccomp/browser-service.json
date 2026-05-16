@@ -1,0 +1,51 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "archMap": [
+    {"architecture": "SCMP_ARCH_X86_64", "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]},
+    {"architecture": "SCMP_ARCH_AARCH64", "subArchitectures": ["SCMP_ARCH_ARM"]}
+  ],
+  "syscalls": [
+    {
+      "comment": "Kernel keyring — process isolation escape vector",
+      "names": ["add_key", "keyctl", "request_key"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "eBPF — arbitrary kernel code execution risk",
+      "names": ["bpf"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Process accounting — requires CAP_SYS_PACCT",
+      "names": ["acct"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "x86 LDT manipulation — privilege escalation on x86",
+      "names": ["modify_ldt"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Kernel dcache — info leak",
+      "names": ["lookup_dcookie"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "x86 v86 emulation — unneeded, privilege escalation vector",
+      "names": ["vm86", "vm86old"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Kernel module loading",
+      "names": ["create_module", "init_module", "finit_module", "delete_module"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    }
+  ]
+}

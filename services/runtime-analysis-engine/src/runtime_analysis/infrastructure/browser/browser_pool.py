@@ -12,6 +12,23 @@ log = logging.getLogger(__name__)
 
 _WATCHDOG_INTERVAL = 10  # seconds
 
+# Hardened Chromium launch flags — no --no-sandbox since the container runs as non-root
+# (kernel sandbox is active). See services/runtime-analysis-engine/Dockerfile.
+_CHROMIUM_ARGS: list[str] = [
+    "--disable-dev-shm-usage",          # use /tmp instead of /dev/shm (Docker default is small)
+    "--disable-gpu",
+    "--disable-extensions",
+    "--disable-background-networking",   # no unsolicited outbound from Chrome itself
+    "--disable-default-apps",
+    "--disable-sync",
+    "--disable-translate",
+    "--disable-features=Translate,BackForwardCache",
+    "--metrics-recording-only",          # no UMA data sent
+    "--mute-audio",
+    "--no-first-run",
+    "--safebrowsing-disable-auto-update",
+]
+
 
 @dataclass
 class _BrowserSlot:
@@ -43,13 +60,7 @@ class BrowserPool:
         for i in range(self._size):
             browser = await playwright.chromium.launch(
                 headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--disable-extensions",
-                ],
+                args=_CHROMIUM_ARGS,
             )
             slot = _BrowserSlot(browser=browser, index=i)
             self._slots.append(slot)
@@ -92,13 +103,7 @@ class BrowserPool:
         log.warning("browser_pool.restarting", extra={"index": index})
         browser = await self._playwright.chromium.launch(
             headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-extensions",
-            ],
+            args=_CHROMIUM_ARGS,
         )
         self._slots[index].browser = browser
         return browser

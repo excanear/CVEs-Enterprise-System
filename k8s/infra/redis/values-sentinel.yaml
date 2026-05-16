@@ -1,0 +1,95 @@
+# ── Bitnami Redis Sentinel Helm Values — CVEs Enterprise Platform ─────────────
+# Install: helm install cves-redis bitnami/redis -n cves-infra -f values-sentinel.yaml
+# Chart version: bitnami/redis >= 20.0
+#
+# Topology: 1 master + 2 replicas + 3 sentinels (embedded in each replica pod)
+# Sentinel handles automatic failover — no code change required in services.
+#
+# Service DNS used by services:
+#   REDIS_URL (EVE): redis+sentinel://cves-redis.cves-infra.svc.cluster.local:26379/mymaster/0
+#   REDIS_URL (ACL): redis+sentinel://cves-redis.cves-infra.svc.cluster.local:26379/mymaster/1
+# ──────────────────────────────────────────────────────────────────────────────
+
+architecture: replication
+
+auth:
+  enabled: false   # Enable and set password for production hardening
+  # sentinel: true
+  # password: "CHANGE_ME"
+
+sentinel:
+  enabled: true
+  masterSet: mymaster
+  quorum: 2
+  downAfterMilliseconds: 5000
+  failoverTimeout: 60000
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+master:
+  count: 1
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  podAntiAffinityPreset: hard
+
+replica:
+  replicaCount: 2
+  persistence:
+    enabled: true
+    storageClass: gp3
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  podAntiAffinityPreset: hard
+
+# Save to disk every 60s if at least 1 key changed
+commonConfiguration: |
+  save 60 1
+  appendonly yes
+  appendfsync everysec
+  maxmemory-policy allkeys-lru
+  maxmemory 800mb
+  lazyfree-lazy-eviction yes
+  lazyfree-lazy-expire yes
+
+tolerations:
+  - key: infra
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+nodeSelector:
+  nodegroup: infra
+
+metrics:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+    prometheus.io/path: "/metrics"

@@ -1,0 +1,206 @@
+# ── NetworkPolicies — cves-scanner namespace ──────────────────────────────────
+# Default: deny all ingress + egress, then whitelist explicit flows.
+# Internet egress only via Squid (port 3128) — Squid itself is permitted full
+# egress on 80/443. Services use HTTP_PROXY/HTTPS_PROXY env vars.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Default deny all traffic in cves-scanner ─────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: cves-scanner
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ── Allow Prometheus scraping into scanner pods ───────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: cves-scanner
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cves-platform
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - port: 8001   # discovery-engine
+        - port: 8003   # scan-orchestrator
+        - port: 8004   # runtime-analysis-engine
+        - port: 8005   # js-intelligence-engine
+        - port: 8006   # exposure-validation-engine
+
+---
+# ── Allow scanner services to receive intra-namespace traffic ─────────────────
+# (e.g. scan-orchestrator → discovery-engine, RAE, JSI, EVE)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-scanner
+  namespace: cves-scanner
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cves-platform
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-scanner
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: cves-platform
+
+---
+# ── Allow scanner services to receive from cves-backend (dashboard) ───────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-scanner
+  namespace: cves-scanner
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cves-platform
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dashboard
+
+---
+# ── Scanner egress to cves-infra (Kafka, PostgreSQL, Redis) ──────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-infra
+  namespace: cves-scanner
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cves-platform
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-infra
+      ports:
+        - port: 9092   # Kafka plain
+        - port: 9093   # Kafka TLS
+        - port: 5432   # PostgreSQL (pooler)
+        - port: 6379   # Redis
+        - port: 26379  # Redis Sentinel
+
+---
+# ── Scanner egress to cves-backend (OTel Collector only) ─────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-otel
+  namespace: cves-scanner
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cves-platform
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: otel-collector
+      ports:
+        - port: 4317   # OTLP gRPC
+        - port: 4318   # OTLP HTTP
+
+---
+# ── Scanner egress to Squid (internet via proxy) ──────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-squid
+  namespace: cves-scanner
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cves-platform
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-scanner
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: squid
+      ports:
+        - port: 3128
+
+---
+# ── Squid egress — full internet on 80/443 ───────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-squid-internet-egress
+  namespace: cves-scanner
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: squid
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 80
+        - port: 443
+    # Also allow DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── Allow DNS from all scanner pods ──────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: cves-scanner
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

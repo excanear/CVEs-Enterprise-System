@@ -1,0 +1,159 @@
+# ── Scan Orchestrator — Deployment ───────────────────────────────────────────
+# Coordinator service: receives scan requests, orchestrates Discovery → RAE/JSI → EVE.
+# HTTP-triggered. Scales via HPA CPU. Port 8003.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scan-orchestrator
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: scan-orchestrator
+    app.kubernetes.io/component: scanner
+    app.kubernetes.io/part-of: cves-platform
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scan-orchestrator
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: scan-orchestrator
+        app.kubernetes.io/component: scanner
+        app.kubernetes.io/part-of: cves-platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8003"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: scan-orchestrator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        nodegroup: general
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: scan-orchestrator
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: scan-orchestrator
+          image: ghcr.io/cves-enterprise/scan-orchestrator:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8003
+              name: http
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cves-platform-secrets
+                  key: database-url
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "cves-kafka-kafka-bootstrap.cves-infra.svc.cluster.local:9092"
+            - name: DISCOVERY_URL
+              value: "http://discovery-engine.cves-scanner.svc.cluster.local:8001"
+            - name: RAE_URL
+              value: "http://runtime-analysis-engine.cves-scanner.svc.cluster.local:8004"
+            - name: JSI_URL
+              value: "http://js-intelligence-engine.cves-scanner.svc.cluster.local:8005"
+            - name: EVE_URL
+              value: "http://exposure-validation-engine.cves-scanner.svc.cluster.local:8006"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.cves-backend.svc.cluster.local:4317"
+            - name: OTEL_SERVICE_NAME
+              value: "scan-orchestrator"
+            - name: HTTP_PROXY
+              value: "http://squid.cves-scanner.svc.cluster.local:3128"
+            - name: HTTPS_PROXY
+              value: "http://squid.cves-scanner.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc.cluster.local,localhost,127.0.0.1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PORT
+              value: "8003"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scan-orchestrator
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: scan-orchestrator
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  selector:
+    app.kubernetes.io/name: scan-orchestrator
+  ports:
+    - port: 8003
+      targetPort: http
+      name: http
+  type: ClusterIP
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: scan-orchestrator
+  namespace: cves-scanner
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scan-orchestrator

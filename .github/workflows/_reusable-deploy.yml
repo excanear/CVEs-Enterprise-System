@@ -1,0 +1,196 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Reusable Deploy Workflow
+#  Called by deploy-staging and deploy-production.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Reusable Deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+        description: "Target environment (staging | production)"
+      image_tag:
+        required: true
+        type: string
+        description: "Docker image tag to deploy (e.g. sha-abc1234 or v1.2.3)"
+      namespace:
+        required: true
+        type: string
+        description: "Kubernetes namespace"
+      k8s_context:
+        required: false
+        type: string
+        default: ""
+        description: "kubectl context name (leave empty to use cluster kubeconfig)"
+      smoke_test_url:
+        required: false
+        type: string
+        default: ""
+        description: "Health-check URL for post-deploy smoke test"
+    secrets:
+      KUBECONFIG_B64:
+        required: true
+        description: "Base64-encoded kubeconfig for the target cluster"
+      REGISTRY_TOKEN:
+        required: false
+        description: "GHCR read token for image pull secrets (optional)"
+
+permissions:
+  contents: read
+  deployments: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_ORG: ${{ github.repository_owner }}
+  SERVICES: >-
+    scan-orchestrator
+    discovery-engine
+    runtime-analysis-engine
+    js-intelligence-engine
+    exposure-validation-engine
+    asset-graph-engine
+    ai-correlation-layer
+    reporting-engine
+    dashboard
+
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  deploy:
+    name: Deploy → ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.smoke_test_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── kubectl setup ────────────────────────────────────────────────────
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.31.0"
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          if [[ -n "${{ inputs.k8s_context }}" ]]; then
+            kubectl config use-context "${{ inputs.k8s_context }}"
+          fi
+
+      - name: Verify cluster connectivity
+        run: kubectl cluster-info --request-timeout=10s
+
+      # ── Update image tags in manifests ───────────────────────────────────
+      - name: Patch image tags
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          NAMESPACE="${{ inputs.namespace }}"
+          ORG="${{ env.IMAGE_ORG }}"
+          REG="${{ env.REGISTRY }}"
+
+          for svc in ${{ env.SERVICES }}; do
+            MANIFEST_DIR="k8s/services/${svc}"
+            if [[ -d "$MANIFEST_DIR" ]]; then
+              echo "Patching deployment for ${svc} → ${TAG}"
+              kubectl set image deployment/"${svc}" \
+                "${svc}=${REG}/${ORG}/cves-${svc}:${TAG}" \
+                --namespace="${NAMESPACE}" \
+                --record=false \
+                --dry-run=client -o yaml > /tmp/patch-"${svc}".yaml 2>/dev/null || true
+            fi
+          done
+
+      # ── Apply all k8s manifests ──────────────────────────────────────────
+      - name: Apply namespace manifests
+        run: |
+          kubectl apply -f k8s/namespaces.yaml
+
+      - name: Apply RBAC
+        run: |
+          kubectl apply -f k8s/rbac/ --recursive
+
+      - name: Apply network policies
+        run: |
+          kubectl apply -f k8s/networkpolicies/ --recursive
+
+      - name: Apply service manifests
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          NAMESPACE="${{ inputs.namespace }}"
+          ORG="${{ env.IMAGE_ORG }}"
+          REG="${{ env.REGISTRY }}"
+
+          for svc in ${{ env.SERVICES }}; do
+            MANIFEST_DIR="k8s/services/${svc}"
+            if [[ -d "$MANIFEST_DIR" ]]; then
+              echo "━━━ Applying ${svc} ━━━"
+              # Replace image placeholder in manifests
+              find "$MANIFEST_DIR" -name "*.yaml" -o -name "*.yml" | \
+                xargs sed "s|IMAGE_PLACEHOLDER|${REG}/${ORG}/cves-${svc}:${TAG}|g" | \
+                kubectl apply --namespace="${NAMESPACE}" -f -
+            fi
+          done
+
+      - name: Apply KEDA scaledObjects
+        run: |
+          kubectl apply -f k8s/keda/ --recursive --namespace="${{ inputs.namespace }}" || true
+
+      # ── Wait for rollout ──────────────────────────────────────────────────
+      - name: Wait for all deployments
+        timeout-minutes: 10
+        run: |
+          NAMESPACE="${{ inputs.namespace }}"
+          for svc in ${{ env.SERVICES }}; do
+            if kubectl get deployment "${svc}" --namespace="${NAMESPACE}" &>/dev/null; then
+              echo "Waiting for ${svc}..."
+              kubectl rollout status deployment/"${svc}" \
+                --namespace="${NAMESPACE}" \
+                --timeout=300s
+            fi
+          done
+          echo "All deployments rolled out successfully."
+
+      # ── Smoke test ────────────────────────────────────────────────────────
+      - name: Smoke test (health checks)
+        if: inputs.smoke_test_url != ''
+        run: |
+          URL="${{ inputs.smoke_test_url }}"
+          echo "Smoke testing ${URL} ..."
+          for attempt in 1 2 3 4 5; do
+            STATUS=$(curl -o /dev/null -s -w "%{http_code}" --max-time 10 "${URL}/health" 2>/dev/null || echo "000")
+            if [[ "$STATUS" == "200" ]]; then
+              echo "Health check passed (attempt ${attempt})"
+              exit 0
+            fi
+            echo "Attempt ${attempt}: got ${STATUS}, retrying in 15s..."
+            sleep 15
+          done
+          echo "ERROR: smoke test failed after 5 attempts"
+          exit 1
+
+      # ── Rollback on failure ───────────────────────────────────────────────
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed — rolling back..."
+          NAMESPACE="${{ inputs.namespace }}"
+          for svc in ${{ env.SERVICES }}; do
+            if kubectl get deployment "${svc}" --namespace="${NAMESPACE}" &>/dev/null; then
+              kubectl rollout undo deployment/"${svc}" --namespace="${NAMESPACE}" || true
+            fi
+          done
+
+      - name: Write deployment summary
+        if: always()
+        run: |
+          echo "## Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Environment**: ${{ inputs.environment }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image Tag**: \`${{ inputs.image_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Namespace**: \`${{ inputs.namespace }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit**: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Actor**: ${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"

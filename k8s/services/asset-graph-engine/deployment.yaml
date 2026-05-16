@@ -1,0 +1,155 @@
+# ── Asset Graph Engine — Deployment ──────────────────────────────────────────
+# Kafka consumer (asi.asset.events + rf.fingerprint.events + jsi.js.events + eve.exposure.events).
+# KEDA scales on asi.asset.events consumer lag (highest volume).
+# Writes to Neo4j graph + PostgreSQL.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asset-graph-engine
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: asset-graph-engine
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: cves-platform
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: asset-graph-engine
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: asset-graph-engine
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: cves-platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8007"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: asset-graph-engine
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        nodegroup: general
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: asset-graph-engine
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: asset-graph-engine
+          image: ghcr.io/cves-enterprise/asset-graph-engine:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8007
+              name: http
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cves-platform-secrets
+                  key: database-url
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cves-platform-secrets
+                  key: neo4j-password
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "cves-kafka-kafka-bootstrap.cves-infra.svc.cluster.local:9092"
+            - name: NEO4J_URL
+              value: "bolt://neo4j.cves-infra.svc.cluster.local:7687"
+            - name: NEO4J_USER
+              value: "neo4j"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.cves-backend.svc.cluster.local:4317"
+            - name: OTEL_SERVICE_NAME
+              value: "asset-graph-engine"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PORT
+              value: "8007"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: asset-graph-engine
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: asset-graph-engine
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  selector:
+    app.kubernetes.io/name: asset-graph-engine
+  ports:
+    - port: 8007
+      targetPort: http
+      name: http
+  type: ClusterIP
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: asset-graph-engine
+  namespace: cves-backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: asset-graph-engine

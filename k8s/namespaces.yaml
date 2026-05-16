@@ -1,0 +1,36 @@
+# ── CVEs Enterprise Platform — Kubernetes Namespaces ──────────────────────────
+# Three-namespace topology mirrors Docker Compose network segmentation:
+#   cves-infra    → Kafka, PostgreSQL, Redis, Neo4j, OpenSearch (internal only)
+#   cves-backend  → platform API services + monitoring (no internet egress)
+#   cves-scanner  → browser/scan services (internet egress via Squid proxy)
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cves-infra
+  labels:
+    name: cves-infra
+    role: infra
+    app.kubernetes.io/part-of: cves-platform
+    # NetworkPolicy selector label
+    kubernetes.io/metadata.name: cves-infra
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cves-backend
+  labels:
+    name: cves-backend
+    role: backend
+    app.kubernetes.io/part-of: cves-platform
+    kubernetes.io/metadata.name: cves-backend
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cves-scanner
+  labels:
+    name: cves-scanner
+    role: scanner
+    app.kubernetes.io/part-of: cves-platform
+    kubernetes.io/metadata.name: cves-scanner

@@ -20,6 +20,7 @@ from fastapi import FastAPI
 
 from cves_db.session import AsyncSessionFactory
 from cves_observability.health import HealthRouter
+from cves_observability.instrumentation import instrument_app
 from cves_observability.logging import setup_logging
 from cves_observability.tracing import setup_tracing
 
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
     health_router = HealthRouter(service_name=_SERVICE_NAME, version="0.1.0")
     app.include_router(health_router.router)
     app.include_router(router)
+    instrument_app(app, service_name=_SERVICE_NAME)
     return app
 
 

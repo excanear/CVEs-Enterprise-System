@@ -1,0 +1,197 @@
+# ── Dashboard — Deployment ────────────────────────────────────────────────────
+# Next.js 15 App Router (Node.js runtime). Scales via HPA CPU.
+# Aggregates data from all backend services via HTTP.
+# Exposed externally via NGINX Ingress (see k8s/services/dashboard/ingress.yaml).
+# Port 3000.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: dashboard
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: cves-platform
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dashboard
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: cves-platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/api/metrics"
+    spec:
+      serviceAccountName: dashboard
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        nodegroup: general
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: dashboard
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: dashboard
+          image: ghcr.io/cves-enterprise/dashboard:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3000"
+            # Backend service URLs (server-side only — not NEXT_PUBLIC_*)
+            - name: RAE_BASE_URL
+              value: "http://runtime-analysis-engine.cves-scanner.svc.cluster.local:8004"
+            - name: JSI_BASE_URL
+              value: "http://js-intelligence-engine.cves-scanner.svc.cluster.local:8005"
+            - name: EVE_BASE_URL
+              value: "http://exposure-validation-engine.cves-scanner.svc.cluster.local:8006"
+            - name: AGE_BASE_URL
+              value: "http://asset-graph-engine.cves-backend.svc.cluster.local:8007"
+            - name: ACL_BASE_URL
+              value: "http://ai-correlation-layer.cves-backend.svc.cluster.local:8008"
+            - name: RE_BASE_URL
+              value: "http://reporting-engine.cves-backend.svc.cluster.local:8009"
+            - name: SO_BASE_URL
+              value: "http://scan-orchestrator.cves-scanner.svc.cluster.local:8003"
+            # Public (browser-side) env — must be set at build time for Next.js
+            # Override NEXT_PUBLIC_* via build args, not runtime env
+            - name: NEXT_PUBLIC_DEFAULT_TENANT_ID
+              value: "00000000-0000-0000-0000-000000000001"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            # Next.js writes .next/cache at runtime if not pre-built
+            - name: nextjs-cache
+              mountPath: /app/.next/cache
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            # Next.js writes cache files — readOnly must be false
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: nextjs-cache
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: dashboard
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  selector:
+    app.kubernetes.io/name: dashboard
+  ports:
+    - port: 3000
+      targetPort: http
+      name: http
+  type: ClusterIP
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard
+  namespace: cves-backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard
+
+---
+# ── Ingress — Dashboard (external access) ────────────────────────────────────
+# TLS terminated at the Ingress level.
+# Replace <YOUR_DOMAIN> with actual domain and provision cert-manager issuer
+# or supply the TLS secret manually.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dashboard
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: dashboard
+    app.kubernetes.io/part-of: cves-platform
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Uncomment to enable cert-manager:
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  # tls:
+  #   - hosts:
+  #       - cves.yourdomain.com
+  #     secretName: dashboard-tls
+  rules:
+    - host: cves.yourdomain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard
+                port:
+                  name: http

@@ -2,49 +2,31 @@
 
 Used by all validation stages that need to make outbound HTTP requests.
 Max response body: 512 KB (sufficient for header/body analysis without memory risk).
+
+SSRF protection is provided by cves_security.ssrf:
+  - DNS-resolves ALL hostnames (domain names are never blindly allowed)
+  - Blocks private ranges, metadata endpoints, forbidden schemes
+  - SafeAsyncClient re-checks on every redirect hop
 """
 from __future__ import annotations
 
-import ipaddress
 import time
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 import httpx
 import structlog
 
+from cves_security.ssrf import (
+    SafeAsyncClient,
+    _ALLOWED_SCHEMES,
+    _PRIVATE_NETS,
+    ssrf_check as _ssrf_check,
+)
+
 log = structlog.get_logger(__name__)
 
-# Private/loopback network blocks — never probe these
-_PRIVATE_NETS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-]
-
-_ALLOWED_SCHEMES = {"http", "https"}
 _MAX_RESPONSE_BYTES = 512 * 1024  # 512 KB
 _DEFAULT_TIMEOUT = 15.0  # seconds
-
-
-def _ssrf_check(url: str) -> None:
-    """Raise ValueError if the URL targets a private/internal network or forbidden scheme."""
-    parsed = urlparse(url)
-    if parsed.scheme not in _ALLOWED_SCHEMES:
-        raise ValueError(f"Blocked scheme: {parsed.scheme!r}")
-    try:
-        addr = ipaddress.ip_address(parsed.hostname or "")
-        for net in _PRIVATE_NETS:
-            if addr in net:
-                raise ValueError(f"SSRF blocked: private IP {addr}")
-    except ValueError as exc:
-        if "SSRF blocked" in str(exc):
-            raise
-        # hostname is a domain name — allow (DNS resolution is runtime-checked by OS)
 
 
 @dataclass
@@ -65,7 +47,7 @@ class HTTPProber:
     """Async HTTP prober with SSRF protection."""
 
     def __init__(self, timeout: float = _DEFAULT_TIMEOUT) -> None:
-        self._client = httpx.AsyncClient(
+        self._client = SafeAsyncClient(
             timeout=httpx.Timeout(timeout),
             follow_redirects=True,
             http2=True,

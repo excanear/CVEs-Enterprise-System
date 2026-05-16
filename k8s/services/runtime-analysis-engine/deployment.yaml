@@ -1,0 +1,182 @@
+# ── Runtime Analysis Engine — Deployment ─────────────────────────────────────
+# Browser-pool service (Playwright + Chromium). Runs on dedicated browser node pool.
+# Key constraints:
+#   - /dev/shm mounted as Memory emptyDir (2Gi) — Chromium shared memory
+#   - readOnlyRootFilesystem: false — Chromium writes to /tmp and profile dirs
+#   - runAsUser: 1001 — enables Chromium kernel namespace sandbox (no --no-sandbox)
+#   - nodeSelector: browser node pool (c6i.2xlarge: 8 vCPU / 16GB)
+#   - KEDA scales on rf.fingerprint.events consumer lag (but RAE is HTTP-triggered;
+#     HPA CPU-based is used instead — see ../../../keda/ for consumer-based services)
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runtime-analysis-engine
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: runtime-analysis-engine
+    app.kubernetes.io/component: scanner
+    app.kubernetes.io/part-of: cves-platform
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: runtime-analysis-engine
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: runtime-analysis-engine
+        app.kubernetes.io/component: scanner
+        app.kubernetes.io/part-of: cves-platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8004"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: runtime-analysis-engine
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      # Dedicated browser node pool
+      nodeSelector:
+        nodegroup: browser
+      tolerations:
+        - key: browser
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: runtime-analysis-engine
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: runtime-analysis-engine
+          image: ghcr.io/cves-enterprise/runtime-analysis-engine:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8004
+              name: http
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cves-platform-secrets
+                  key: database-url
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "cves-kafka-kafka-bootstrap.cves-infra.svc.cluster.local:9092"
+            - name: BROWSER_POOL_SIZE
+              value: "3"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.cves-backend.svc.cluster.local:4317"
+            - name: OTEL_SERVICE_NAME
+              value: "runtime-analysis-engine"
+            - name: HTTP_PROXY
+              value: "http://squid.cves-scanner.svc.cluster.local:3128"
+            - name: HTTPS_PROXY
+              value: "http://squid.cves-scanner.svc.cluster.local:3128"
+            - name: NO_PROXY
+              value: ".svc.cluster.local,localhost,127.0.0.1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PORT
+              value: "8004"
+          volumeMounts:
+            # Chromium shared memory — critical for stability
+            - name: dshm
+              mountPath: /dev/shm
+            # Writable /tmp for Chromium profile directories
+            - name: tmp
+              mountPath: /tmp
+            # Chromium writes to ~/.config, ~/.cache
+            - name: home
+              mountPath: /home/cves
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            failureThreshold: 4
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: "1"
+              memory: 3Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          securityContext:
+            # readOnlyRootFilesystem MUST be false for Chromium
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              # If Chromium kernel sandbox fails without SYS_ADMIN on this kernel,
+              # uncomment the line below as fallback:
+              # add: [SYS_ADMIN]
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: runtime-analysis-engine
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: runtime-analysis-engine
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  selector:
+    app.kubernetes.io/name: runtime-analysis-engine
+  ports:
+    - port: 8004
+      targetPort: http
+      name: http
+  type: ClusterIP
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: runtime-analysis-engine
+  namespace: cves-scanner
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: runtime-analysis-engine

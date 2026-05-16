@@ -12,9 +12,7 @@ Design constraints:
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import logging
-import socket
 import time
 from dataclasses import dataclass, field
 from typing import Final
@@ -23,19 +21,9 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-logger = logging.getLogger(__name__)
+from cves_security.ssrf import SafeAsyncClient, async_ssrf_check
 
-# Private / reserved IP ranges — SSRF protection
-_PRIVATE_NETS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
-]
+logger = logging.getLogger(__name__)
 
 _SKIP_EXTENSIONS: Final = frozenset({
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
@@ -102,7 +90,7 @@ class WebCrawler:
         visited: set[str] = set()
         pages: list[CrawledPage] = []
 
-        async with httpx.AsyncClient(
+        async with SafeAsyncClient(
             timeout=self._timeout,
             follow_redirects=True,
             verify=True,
@@ -193,12 +181,10 @@ class WebCrawler:
     async def _is_ssrf_target(self, hostname: str) -> bool:
         """Resolve hostname and check if it maps to a private address."""
         try:
-            loop = asyncio.get_event_loop()
-            addr = await loop.run_in_executor(None, socket.gethostbyname, hostname)
-            ip = ipaddress.ip_address(addr)
-            return any(ip in net for net in _PRIVATE_NETS)
-        except Exception:
-            return False  # Can't resolve → let httpx handle it
+            await async_ssrf_check(f"http://{hostname}/")
+            return False
+        except ValueError:
+            return True
 
 
 def _extract_links(html: str, base_url: str) -> list[str]:

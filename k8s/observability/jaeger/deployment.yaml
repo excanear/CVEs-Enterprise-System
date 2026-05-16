@@ -1,0 +1,121 @@
+# ── Jaeger — all-in-one Deployment ────────────────────────────────────────────
+# Receives traces from OTel Collector via OTLP gRPC (4317).
+# UI exposed internally on 16686 (accessed by Grafana datasource).
+# all-in-one uses in-memory storage — for production at scale:
+#   Replace with Jaeger Operator + OpenSearch/Cassandra backend.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/component: observability
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jaeger
+  strategy:
+    type: Recreate   # In-memory storage: no state to distribute
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jaeger
+        app.kubernetes.io/component: observability
+        app.kubernetes.io/part-of: cves-platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "14269"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      nodeSelector:
+        nodegroup: general
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: jaeger
+          image: jaegertracing/all-in-one:1.62
+          args:
+            - "--memory.max-traces=50000"
+            - "--query.base-path=/"
+          ports:
+            - containerPort: 16686
+              name: ui
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 4318
+              name: otlp-http
+            - containerPort: 14269
+              name: admin
+          env:
+            - name: COLLECTOR_OTLP_ENABLED
+              value: "true"
+            - name: SPAN_STORAGE_TYPE
+              value: "memory"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: admin
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: cves-backend
+  labels:
+    app.kubernetes.io/name: jaeger
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  selector:
+    app.kubernetes.io/name: jaeger
+  ports:
+    - port: 16686
+      targetPort: ui
+      name: ui
+    - port: 4317
+      targetPort: otlp-grpc
+      name: otlp-grpc
+    - port: 4318
+      targetPort: otlp-http
+      name: otlp-http
+    - port: 14269
+      targetPort: admin
+      name: admin
+  type: ClusterIP

@@ -1,0 +1,145 @@
+# ── CloudNativePG PostgreSQL Cluster — CVEs Enterprise Platform ───────────────
+# 1 primary + 2 synchronous replicas + PgBouncer transaction pooler
+# Operator: CloudNativePG 1.24 (kubectl apply cnpg-1.24.0.yaml)
+# StorageClass: gp3 (requires EBS CSI driver on EKS)
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: cves-postgres
+  namespace: cves-infra
+  labels:
+    app.kubernetes.io/name: cves-postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  # 1 primary + 2 replicas (maxSyncReplicas=1 means at least 1 sync replica)
+  instances: 3
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
+
+  postgresql:
+    pg_hba:
+      - "host all all 0.0.0.0/0 scram-sha-256"
+    parameters:
+      max_connections: "400"
+      shared_buffers: "512MB"
+      effective_cache_size: "2GB"
+      maintenance_work_mem: "128MB"
+      checkpoint_completion_target: "0.9"
+      wal_buffers: "16MB"
+      default_statistics_target: "100"
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+      work_mem: "4MB"
+      huge_pages: "off"
+      wal_level: "replica"
+      max_wal_size: "2GB"
+      min_wal_size: "512MB"
+
+  bootstrap:
+    initdb:
+      database: cves_platform
+      owner: cves
+      secret:
+        name: postgres-credentials
+      postInitApplicationSQL:
+        - CREATE SCHEMA IF NOT EXISTS asi;
+        - CREATE SCHEMA IF NOT EXISTS rf;
+        - CREATE SCHEMA IF NOT EXISTS jsi;
+        - CREATE SCHEMA IF NOT EXISTS eve;
+        - CREATE SCHEMA IF NOT EXISTS age;
+        - CREATE SCHEMA IF NOT EXISTS acl;
+        - CREATE SCHEMA IF NOT EXISTS re;
+        - CREATE SCHEMA IF NOT EXISTS so;
+        - GRANT ALL ON SCHEMA asi, rf, jsi, eve, age, acl, re, so TO cves;
+
+  superuserSecret:
+    name: postgres-credentials
+
+  storage:
+    storageClass: gp3
+    size: 200Gi
+
+  walStorage:
+    storageClass: gp3
+    size: 50Gi
+
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+
+  affinity:
+    podAntiAffinity: required
+    tolerations:
+      - key: infra
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    nodeSelector:
+      nodegroup: infra
+
+  monitoring:
+    enablePodMonitor: false   # Using Prometheus pod-annotation scraping instead
+
+  backup:
+    retentionPolicy: "30d"
+    # Configure S3 backup target:
+    # barmanObjectStore:
+    #   destinationPath: "s3://cves-backups/postgres"
+    #   s3Credentials:
+    #     accessKeyId:
+    #       name: postgres-s3-credentials
+    #       key: ACCESS_KEY_ID
+    #     secretAccessKey:
+    #       name: postgres-s3-credentials
+    #       key: SECRET_ACCESS_KEY
+
+---
+# ── PgBouncer transaction-mode pooler (read-write endpoint) ──────────────────
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: cves-postgres-pooler-rw
+  namespace: cves-infra
+  labels:
+    app.kubernetes.io/name: cves-postgres-pooler
+    app.kubernetes.io/component: connection-pooler
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  cluster:
+    name: cves-postgres
+  instances: 3
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "2000"
+      default_pool_size: "50"
+      reserve_pool_size: "10"
+      reserve_pool_timeout: "5"
+      server_idle_timeout: "600"
+      client_idle_timeout: "0"
+      log_connections: "0"
+      log_disconnections: "0"
+  template:
+    spec:
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+      affinity:
+        tolerations:
+          - key: infra
+            operator: Equal
+            value: "true"
+            effect: NoSchedule
+        nodeSelector:
+          nodegroup: infra

@@ -33,6 +33,12 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8004
 
+# Non-root user — required so Chromium kernel sandbox works (no --no-sandbox)
+RUN groupadd -r cves --gid 1001 \
+    && useradd -r -u 1001 -g cves --no-create-home cves \
+    && chown -R cves:cves /app
+USER 1001
+
 EXPOSE 8004
 
 CMD ["python", "-m", "uvicorn", "runtime_analysis.main:app", \

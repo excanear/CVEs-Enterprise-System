@@ -1,0 +1,164 @@
+# ── Squid Egress Proxy — cves-scanner namespace ───────────────────────────────
+# Provides defense-in-depth SSRF egress filtering for scanner services.
+# Mirrors infra/squid/squid.conf with K8s-aware NO_PROXY guidance.
+# In K8s, internal traffic bypasses Squid via NO_PROXY=.svc.cluster.local
+# NetworkPolicies provide the primary inter-namespace isolation.
+# ──────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: squid-config
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: squid
+    app.kubernetes.io/part-of: cves-platform
+data:
+  squid.conf: |
+    acl SSL_ports port 443
+    acl Safe_ports port 80
+    acl Safe_ports port 443
+    acl CONNECT method CONNECT
+
+    acl to_private dst 10.0.0.0/8
+    acl to_private dst 172.16.0.0/12
+    acl to_private dst 192.168.0.0/16
+    acl to_private dst 127.0.0.0/8
+    acl to_private dst 169.254.0.0/16
+    acl to_private dst 100.64.0.0/10
+    acl to_private dst ::1/128
+    acl to_private dst fc00::/7
+    acl to_private dst fe80::/10
+
+    acl to_metadata dst 169.254.169.254/32
+    acl to_metadata dst 100.100.100.200/32
+
+    http_access deny CONNECT !SSL_ports
+    http_access deny !Safe_ports
+    http_access deny to_private
+    http_access deny to_metadata
+    http_access allow all
+
+    http_port 3128
+
+    dns_nameservers 8.8.8.8 8.8.4.4 1.1.1.1
+
+    cache deny all
+    cache_mem 8 MB
+
+    access_log stdio:/dev/stdout combined
+    cache_log stdio:/dev/stderr
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: squid
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: squid
+    app.kubernetes.io/component: egress-proxy
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: squid
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: squid
+        app.kubernetes.io/component: egress-proxy
+        app.kubernetes.io/part-of: cves-platform
+    spec:
+      securityContext:
+        runAsNonRoot: false   # Squid binds low port + needs specific UID
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: squid
+                topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: squid
+          image: ubuntu/squid:6.6-24.04_beta
+          ports:
+            - containerPort: 3128
+              name: proxy
+          volumeMounts:
+            - name: config
+              mountPath: /etc/squid/squid.conf
+              subPath: squid.conf
+            - name: cache
+              mountPath: /var/spool/squid
+            - name: log
+              mountPath: /var/log/squid
+          livenessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: config
+          configMap:
+            name: squid-config
+        - name: cache
+          emptyDir: {}
+        - name: log
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: squid
+  namespace: cves-scanner
+  labels:
+    app.kubernetes.io/name: squid
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  selector:
+    app.kubernetes.io/name: squid
+  ports:
+    - port: 3128
+      targetPort: proxy
+      name: proxy
+  type: ClusterIP
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: squid
+  namespace: cves-scanner
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: squid

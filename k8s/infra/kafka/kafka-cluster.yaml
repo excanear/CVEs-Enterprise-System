@@ -1,0 +1,274 @@
+# ── Strimzi KRaft Kafka Cluster — CVEs Enterprise Platform ───────────────────
+# Strimzi 0.44 / Kafka 3.9.0 — KRaft mode (no ZooKeeper)
+# 3 controller nodes (metadata quorum) + 3 broker nodes (data plane)
+# PVC: gp3 (EBS CSI driver required: eks.amazonaws.com/volume-type: gp3)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Controller pool (KRaft metadata quorum) ───────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: controller
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  replicas: 3
+  roles:
+    - controller
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 20Gi
+        class: gp3
+        deleteClaim: false
+  template:
+    pod:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  strimzi.io/pool-name: controller
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: infra
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      nodeSelector:
+        nodegroup: infra
+
+---
+# ── Broker pool (data plane) ──────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: broker
+  namespace: cves-infra
+  labels:
+    strimzi.io/cluster: cves-kafka
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  replicas: 3
+  roles:
+    - broker
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 6Gi
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 100Gi
+        class: gp3
+        deleteClaim: false
+  template:
+    pod:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  strimzi.io/pool-name: broker
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: infra
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      nodeSelector:
+        nodegroup: infra
+
+---
+# ── Kafka cluster CR ──────────────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: cves-kafka
+  namespace: cves-infra
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+  labels:
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  kafka:
+    version: 3.9.0
+    metadataVersion: "3.9-IV0"
+    listeners:
+      # Plain listener for internal cluster communication (scanner + backend namespaces)
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      # TLS listener (reserved for external or future mTLS use)
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+    config:
+      # Replication + durability
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      # Protocol
+      inter.broker.protocol.version: "3.9"
+      # Retention
+      log.retention.hours: 168            # 7 days
+      log.segment.bytes: 1073741824       # 1 GB segments
+      log.retention.check.interval.ms: 300000
+      # Performance
+      compression.type: lz4
+      message.max.bytes: 10485760         # 10 MB max message
+      num.network.threads: 8
+      num.io.threads: 16
+      socket.send.buffer.bytes: 102400
+      socket.receive.buffer.bytes: 102400
+      # Safety
+      auto.create.topics.enable: "false"  # Topics managed via KafkaTopic CRs
+      unclean.leader.election.enable: "false"
+    # Entity operator manages KafkaTopic and KafkaUser CRs
+  entityOperator:
+    topicOperator:
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    userOperator:
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+
+---
+# ── Schema Registry (Confluent) ───────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: schema-registry
+  namespace: cves-infra
+  labels:
+    app.kubernetes.io/name: schema-registry
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: schema-registry
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: schema-registry
+        app.kubernetes.io/part-of: cves-platform
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      tolerations:
+        - key: infra
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      nodeSelector:
+        nodegroup: infra
+      containers:
+        - name: schema-registry
+          image: confluentinc/cp-schema-registry:7.7.1
+          ports:
+            - containerPort: 8081
+              name: http
+          env:
+            - name: SCHEMA_REGISTRY_HOST_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+              value: "cves-kafka-kafka-bootstrap.cves-infra.svc.cluster.local:9092"
+            - name: SCHEMA_REGISTRY_LISTENERS
+              value: "http://0.0.0.0:8081"
+            - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR
+              value: "3"
+          livenessProbe:
+            httpGet:
+              path: /subjects
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /subjects
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: schema-registry
+  namespace: cves-infra
+  labels:
+    app.kubernetes.io/name: schema-registry
+    app.kubernetes.io/part-of: cves-platform
+spec:
+  selector:
+    app.kubernetes.io/name: schema-registry
+  ports:
+    - port: 8081
+      targetPort: http
+      name: http
+  type: ClusterIP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: schema-registry
+  namespace: cves-infra
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: schema-registry

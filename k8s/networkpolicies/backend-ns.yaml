@@ -1,0 +1,206 @@
+# ── NetworkPolicies — cves-backend namespace ──────────────────────────────────
+# Backend: AGE, ACL, RE, Dashboard, OTel Collector, Prometheus, Grafana, Jaeger.
+# No direct internet egress (LLM calls go directly from ACL — not via Squid here,
+# but can be routed via Squid by adding proxy env vars to ACL deployment).
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Default deny all traffic in cves-backend ─────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: cves-backend
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ── Allow DNS egress ──────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: cves-backend
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── Allow intra-backend traffic ───────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-backend
+  namespace: cves-backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cves-platform
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: cves-platform
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: cves-platform
+
+---
+# ── Allow Ingress controller → Dashboard (from kube-system / ingress-nginx) ──
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-dashboard
+  namespace: cves-backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 3000
+
+---
+# ── Allow Ingress controller → Grafana ────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-grafana
+  namespace: cves-backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 3001
+
+---
+# ── Allow OTel Collector to receive from cves-scanner ────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-otel-from-scanner
+  namespace: cves-backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-scanner
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: cves-platform
+      ports:
+        - port: 4317
+        - port: 4318
+
+---
+# ── Backend egress to cves-infra (Kafka, PG, Redis, Neo4j, OpenSearch) ───────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-infra
+  namespace: cves-backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: cves-platform
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-infra
+      ports:
+        - port: 9092   # Kafka plain
+        - port: 9093   # Kafka TLS
+        - port: 5432   # PostgreSQL
+        - port: 6379   # Redis
+        - port: 26379  # Redis Sentinel
+        - port: 7687   # Neo4j Bolt
+        - port: 9200   # OpenSearch
+
+---
+# ── Backend egress to cves-scanner (for dashboard API calls) ─────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dashboard-egress-to-scanner
+  namespace: cves-backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-scanner
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: cves-platform
+      ports:
+        - port: 8001
+        - port: 8003
+        - port: 8004
+        - port: 8005
+        - port: 8006
+
+---
+# ── ACL internet egress — LLM API (OpenAI) on 443 ─────────────────────────────
+# Only enabled when LLM_ENABLED=true. Restrict to specific IP blocks if possible.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-acl-llm-egress
+  namespace: cves-backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-correlation-layer
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 443

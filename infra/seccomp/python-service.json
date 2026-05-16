@@ -1,0 +1,87 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "archMap": [
+    {"architecture": "SCMP_ARCH_X86_64", "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]},
+    {"architecture": "SCMP_ARCH_AARCH64", "subArchitectures": ["SCMP_ARCH_ARM"]}
+  ],
+  "syscalls": [
+    {
+      "comment": "Kernel keyring — process isolation escape vector",
+      "names": ["add_key", "keyctl", "request_key"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "eBPF — arbitrary kernel code execution risk",
+      "names": ["bpf"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Performance monitoring — side-channel / info-leak",
+      "names": ["perf_event_open"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Process tracing — allows reading/writing other process memory",
+      "names": ["ptrace", "process_vm_readv", "process_vm_writev"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "userfaultfd — kernel exploit primitive (CVE-2022-* patterns)",
+      "names": ["userfaultfd"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Process comparison — info leak",
+      "names": ["kcmp"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Process accounting — requires CAP_SYS_PACCT",
+      "names": ["acct"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "x86 LDT manipulation — privilege escalation on x86",
+      "names": ["modify_ldt"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "io_uring — recent broad CVE attack surface",
+      "names": ["io_uring_setup", "io_uring_enter", "io_uring_register"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Kernel dcache — info leak",
+      "names": ["lookup_dcookie"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "x86 v86 emulation — unneeded, privilege escalation vector",
+      "names": ["vm86", "vm86old"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Namespace creation — Python services do not need new namespaces",
+      "names": ["unshare"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "Kernel module loading",
+      "names": ["create_module", "init_module", "finit_module", "delete_module"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    }
+  ]
+}

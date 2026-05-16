@@ -11,11 +11,9 @@ from dataclasses import dataclass
 import structlog
 from playwright.async_api import async_playwright
 
+from cves_security.ssrf import ssrf_check as _ssrf_check
 from exposure_validation.infrastructure.fetcher.http_prober import (
     ProbeResponse,
-    _PRIVATE_NETS,
-    _ALLOWED_SCHEMES,
-    _ssrf_check,
     _MAX_RESPONSE_BYTES,
 )
 
@@ -36,7 +34,23 @@ class PlaywrightProber:
         t0 = time.monotonic()
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True)
+                browser = await pw.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--disable-extensions",
+                        "--disable-background-networking",
+                        "--disable-default-apps",
+                        "--disable-sync",
+                        "--disable-translate",
+                        "--disable-features=Translate,BackForwardCache",
+                        "--metrics-recording-only",
+                        "--mute-audio",
+                        "--no-first-run",
+                        "--safebrowsing-disable-auto-update",
+                    ],
+                )
                 context = await browser.new_context()
                 page = await context.new_page()
 

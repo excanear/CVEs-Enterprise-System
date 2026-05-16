@@ -1,0 +1,220 @@
+# ── NetworkPolicies — cves-infra namespace ────────────────────────────────────
+# Infra: Kafka, PostgreSQL, Redis, Neo4j, OpenSearch.
+# Only cves-scanner and cves-backend are allowed in on specific ports.
+# No internet egress from infra (operators pull images via node, not pod).
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Default deny all traffic in cves-infra ────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: cves-infra
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ── Allow DNS egress ──────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: cves-infra
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── Kafka: allow ingress from scanner + backend ───────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafka-ingress
+  namespace: cves-infra
+spec:
+  podSelector:
+    matchLabels:
+      strimzi.io/cluster: cves-kafka
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-scanner
+      ports:
+        - port: 9092
+        - port: 9093
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+      ports:
+        - port: 9092
+        - port: 9093
+    # Strimzi controller-to-broker internal traffic
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-infra
+
+---
+# ── PostgreSQL (CloudNativePG) pooler: allow from scanner + backend ───────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-ingress
+  namespace: cves-infra
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: cves-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-scanner
+      ports:
+        - port: 5432
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+      ports:
+        - port: 5432
+    # CloudNativePG internal replication
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-infra
+
+---
+# ── Redis: allow from scanner + backend ──────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-ingress
+  namespace: cves-infra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-scanner
+      ports:
+        - port: 6379
+        - port: 26379
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+      ports:
+        - port: 6379
+        - port: 26379
+    # Redis replication + sentinel inter-pod
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-infra
+
+---
+# ── Neo4j: allow from backend (AGE only) ──────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-neo4j-ingress
+  namespace: cves-infra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: neo4j
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: asset-graph-engine
+      ports:
+        - port: 7687   # Bolt
+
+---
+# ── OpenSearch: allow from backend (RE only) ──────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-opensearch-ingress
+  namespace: cves-infra
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: reporting-engine
+      ports:
+        - port: 9200
+
+---
+# ── Allow Prometheus to scrape infra pods ────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: cves-infra
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-backend
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+
+---
+# ── Infra intra-namespace egress (replication, operator reconciliation) ───────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-infra-egress
+  namespace: cves-infra
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cves-infra
