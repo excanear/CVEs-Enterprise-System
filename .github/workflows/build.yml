@@ -226,7 +226,7 @@ jobs:
 
       # ── Dockle lint (Dockerfile best-practices) ──────────────────────────
       - name: Dockle — Dockerfile linting
-        uses: goodwithtech/dockle-action@v0.1.2
+        uses: goodwithtech/dockle-action@v0.4.15
         with:
           image: >-
             ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/cves-${{ matrix.service }}@${{ steps.push.outputs.digest }}
