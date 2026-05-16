@@ -49,7 +49,7 @@ jobs:
     needs: guard
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Trivy — filesystem scan
         uses: aquasecurity/trivy-action@0.20.0
@@ -118,7 +118,7 @@ jobs:
       image-digest: ${{ steps.push.outputs.digest }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # ── Determine image tag ──────────────────────────────────────────────
       - name: Compute image metadata
@@ -200,7 +200,7 @@ jobs:
             --output cyclonedx-json=sbom-${{ matrix.service }}-cyclonedx.json
 
       - name: Upload SBOMs as artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-${{ matrix.service }}
           path: |

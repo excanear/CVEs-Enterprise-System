@@ -65,7 +65,7 @@ jobs:
       url: ${{ inputs.smoke_test_url }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # ── kubectl setup ────────────────────────────────────────────────────
       - name: Set up kubectl
