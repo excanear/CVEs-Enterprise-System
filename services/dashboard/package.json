@@ -28,7 +28,7 @@
     "@radix-ui/react-progress": "^1.1.1",
     "@radix-ui/react-separator": "^1.1.1",
     "@radix-ui/react-scroll-area": "^1.2.2",
-    "@dagrejs/dagre": "^1.1.4"
+    "@dagrejs/dagre": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^22",
