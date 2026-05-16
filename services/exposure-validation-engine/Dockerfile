@@ -1,6 +1,6 @@
 # Exposure Validation Engine — Dockerfile
 # Playwright base includes Chromium for on-demand SPA probing
-FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.59.0-jammy
 
 WORKDIR /app
 
