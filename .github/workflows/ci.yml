@@ -241,7 +241,7 @@ jobs:
             -q
 
       - name: Upload unit coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: coverage-unit.xml
           flags: unit
@@ -335,7 +335,7 @@ jobs:
             -q
 
       - name: Upload integration coverage
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: coverage-integration.xml
           flags: integration
