@@ -17,7 +17,7 @@
     "@tanstack/react-query-devtools": "^5.62.16",
     "@xyflow/react": "^12.3.5",
     "recharts": "^3.8.1",
-    "lucide-react": "^0.469.0",
+    "lucide-react": "^1.27.0",
     "clsx": "^2.1.1",
     "class-variance-authority": "^0.7.1",
     "tailwind-merge": "^3.6.0",
