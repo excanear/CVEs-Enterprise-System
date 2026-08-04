@@ -62,7 +62,7 @@ jobs:
           exit-code: "0"   # warn only at this stage
 
       - name: Upload FS scan SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v4.37.4
         if: always()
         with:
           sarif_file: trivy-fs.sarif
@@ -182,7 +182,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy image SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v4.37.4
         if: always()
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif
@@ -236,7 +236,7 @@ jobs:
           ignore: "CIS-DI-0010"   # accept non-root user pattern used
 
       - name: Upload Dockle SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v4.37.4
         if: always()
         with:
           sarif_file: dockle-${{ matrix.service }}.sarif
